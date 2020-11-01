@@ -240,7 +240,10 @@ class Amutex {
    void copy( const Amutex& ) { }
 
    int lock() { 
-     return pthread_mutex_lock(&mutex_); 
+     const int ret = pthread_mutex_lock(&mutex_); 
+     if ( ret )
+       std::cerr << "pthread_mutex_lock returned nonzero: " << ret << '\n';
+     return ret;
    }
 
    int trylock() { 
