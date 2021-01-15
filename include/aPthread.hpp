@@ -258,7 +258,7 @@ class Amutex {
      Amutex::copy(m); return *this;
    }
 
-   virtual ~Amutex() { pthread_mutex_destroy(&mutex_); }
+   ~Amutex() { pthread_mutex_destroy(&mutex_); }
 
 };
 
