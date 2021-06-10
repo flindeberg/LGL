@@ -13,19 +13,20 @@ LGL on the web at:  http://www.opte.org/lgl/ (defunct)
 Much thanks to the Marcotte lab for testing. 
 
 If you use this in your research, please cite (if possible):
-- Lindeberg, Fredrik. “Coordinating the Internet.” Licentiate Thesis, Linköping University, 2019. http://urn.kb.se/resolve?urn=urn:nbn:se:liu:diva-161812.
+- Lindeberg, Fredrik. “Coordinating the Internet: Thought Styles, Technology and Coordination.” PhD of Technology, Linköping University, 2021. http://urn.kb.se/resolve?urn=urn:nbn:se:liu:diva-173713
 - Adai, Alex T., Shailesh V. Date, Shannon Wieland, and Edward M. Marcotte. “LGL: Creating a Map of Protein Function with an Algorithm for Visualizing Very Large Biological Networks.” Journal of Molecular Biology 340, no. 1 (2004): 179–90. https://doi.org/10.1016/j.jmb.2004.04.047.
 
 Or bibtex:
 ```
-@thesis{Lindeberg2019,
-  title = {Coordinating the {{Internet}}},
+@thesis{LindebergCoordinating2021,
+  title = {Coordinating the {{Internet}}: {{Thought}} Styles, Technology and Coordination},
+  shorttitle = {Coordinating the {{Internet}}},
   author = {Lindeberg, Fredrik},
-  date = {2019},
-  institution = {{Linköping University}},
+  date = {2021},
+  institution = {{Link\"oping University}},
   url = {http://urn.kb.se/resolve?urn=urn:nbn:se:liu:diva-161812},
-  pagetotal = {383},
-  type = {Licentiate Thesis}
+  langid = {english},
+  type = {PhD of Technology}
 }
 
 @article{Adai2004,
