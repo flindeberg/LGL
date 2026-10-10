@@ -2,20 +2,22 @@ name: Testrun CI
 
 on:
   push:
-    branches: [ master ]
+    branches: [ master, 'llm/**' ]
   pull_request:
     branches: [ master ]
 
-jobs:  
+jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
     - name: "Install Boost"
-      run: sudo apt install libboost-all-dev
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libboost-all-dev
     - name: "Install other dependencies"
       run: |
-        sudo apt install zsh bgpdump xz-utils
+        sudo apt-get install -y zsh bgpdump xz-utils
     - name: "Install everything"
       run: |
         echo Running install
@@ -26,7 +28,8 @@ jobs:
         echo Trying to create graph
         ./creategraphfromdate.sh 2000 09
     - name: Upload graph image
-      uses: actions/upload-artifact@v1
+      uses: actions/upload-artifact@v4
       with:
-        name: Upload graph
+        name: graph
         path: testrun/bview_2000_09/bview_2000_09_transparent.png
+        if-no-files-found: error

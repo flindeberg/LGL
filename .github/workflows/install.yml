@@ -2,27 +2,29 @@ name: Build and install CI
 
 on:
   push:
-    branches: [ master ]
+    branches: [ master, 'llm/**' ]
   pull_request:
     branches: [ master ]
 
-jobs:  
+jobs:
   gcc-build:
     runs-on: ubuntu-latest
-    
+
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
     - name: "Boost"
-      run: sudo apt install libboost-all-dev
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libboost-all-dev
     - name: "Configure and make (C++)"
       run: |
         make -C src all
-        
+
   java-build:
     runs-on: ubuntu-latest
-    
+
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
     - name: "Make one class-file"
       run: |
         echo "Making one class-file"
@@ -32,14 +34,16 @@ jobs:
         echo "Running java jarfiles"
         make -C Java jarfiles
         :
-     
+
   build:
     runs-on: ubuntu-latest
     needs: [java-build, gcc-build]
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
     - name: "Install Boost"
-      run: sudo apt install libboost-all-dev
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libboost-all-dev
     - name: make
       run: make
     - name: make install
