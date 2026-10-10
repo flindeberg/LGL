@@ -18,22 +18,22 @@ get_bview_url(){
 
     #echo "Trying $folderurl ..."
 
-    if curl --head --silent --fail $folderurl > /dev/null;
+    if curl -L --head --silent --fail $folderurl > /dev/null;
     then
-        filename=$(curl --silent $folderurl | grep "bview.[0-9]" | sed -E 's/.*>(bview\.[0-9]*\.[0-9]*\.gz).*/\1/' | tail -n 1)
+        filename=$(curl -L --silent $folderurl | grep "bview.[0-9]" | sed -E 's/.*>(bview\.[0-9]*\.[0-9]*\.gz).*/\1/' | tail -n 1)
 
-        fullurl="${folderurl}/${filename}"
+        fullurl="${folderurl}${filename}"
 
         #"http://data.ris.ripe.net/rrc${rrc}/${y}/" "rrc${rrc}" "${y}"
 
         mkdir -p "${folder}"
 
         #echo $fullurl
-        if curl --head --silent --fail $fullurl > /dev/null;
+        if curl -L --head --silent --fail $fullurl > /dev/null;
         then
             ## potentially add -b for fork, except collection is too hard in bash
             echo "Downloading $fullurl to $folder"
-            wget $fullurl -O "${folder}/bview_${1}_${2}_$filename" 2> /dev/null
+            wget -q $fullurl -O "${folder}/bview_${1}_${2}_$filename" 2> /dev/null
         else
            #echo "$fullurl does not exist."
            :
