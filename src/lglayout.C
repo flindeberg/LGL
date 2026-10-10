@@ -88,7 +88,7 @@ try
   timer.max(MAXITER);
   timer.timeStep(PART_TIME_STEP);
 
-  while ( (optch = getopt(argc,argv,"x:a:t:m:M:i:s:r:k:T:R:S:W:z:o:leOyu:v:Iq:E:L:D")) != -1 )
+  while ( (optch = getopt(argc,argv,"x:a:t:m:M:i:s:r:k:T:R:S:W:z:o:leOyu:v:Iq:E:LD")) != -1 )
     {
       switch (optch) 
         {
