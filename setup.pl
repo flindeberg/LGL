@@ -194,21 +194,29 @@ sub setupCompileEnv
 	my $status = system("c++ -M confcheck/boost_header_compile.cpp");
 	if ($status != 0) {
 		print "It seems boost headers aren't being found...\n";
-		# See if adding /usr/local/include makes things better
+		# See if adding a common install location makes things better:
+		# /usr/local (Intel Homebrew, manual installs), /opt/homebrew
+		# (Apple Silicon Homebrew) or wherever `brew --prefix` says.
 		my $cplus_include_path = $ENV{CPLUS_INCLUDE_PATH};
 		$cplus_include_path = '' unless defined $cplus_include_path;
 		print "CPLUS_INCLUDE_PATH was: $cplus_include_path\n";
-		$ENV{CPLUS_INCLUDE_PATH} = "$cplus_include_path:/usr/local/include";
-		$status = system("c++ -M confcheck/boost_header_compile.cpp");
-		if ($status != 0) {
-			print "Tried to look in /usr/local/include for boost headers, but that didn't bring much joy.\n";
-			# Nah, that didn't help, so revert that change. Not sure what else to do...
-			$ENV{CPLUS_INCLUDE_PATH} = "$cplus_include_path";
+		my @candidates = ('/usr/local/include', '/opt/homebrew/include');
+		my $brew_prefix = `brew --prefix 2>/dev/null`;
+		chomp $brew_prefix;
+		push @candidates, "$brew_prefix/include" if $brew_prefix ne '';
+		foreach my $dir (@candidates) {
+			next unless -d $dir;
+			$ENV{CPLUS_INCLUDE_PATH} = "$cplus_include_path:$dir";
+			$status = system("c++ -M confcheck/boost_header_compile.cpp");
+			if ($status == 0) {
+				# Bingo! That helped, so keep that environment change for subsequent make invocations to take advantage of
+				print "Boost headers are located under $dir/ ! Will use them from there...\n";
+				return;
+			}
+			print "Tried to look in $dir for boost headers, but that didn't bring much joy.\n";
 		}
-		else {
-			# Bingo! That helped, so keep that environment change for subsequent make invocations to take advantage of
-			print "Boost headers are located under /usr/local/include/ ! Will use them from there...\n";
-		}
+		# Nah, that didn't help, so revert that change. Not sure what else to do...
+		$ENV{CPLUS_INCLUDE_PATH} = "$cplus_include_path";
 	}
 }
 

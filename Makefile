@@ -1,4 +1,11 @@
-JARS: 
+# Homebrew's Boost (/opt/homebrew on Apple Silicon) is not on the
+# compiler's default include path, so add it when brew is installed.
+BREW_PREFIX := $(shell brew --prefix 2>/dev/null)
+ifneq ($(BREW_PREFIX),)
+export CPLUS_INCLUDE_PATH := $(if $(CPLUS_INCLUDE_PATH),$(CPLUS_INCLUDE_PATH):)$(BREW_PREFIX)/include
+endif
+
+JARS:
 	make -C Java jarfiles
 
 CBINS: 

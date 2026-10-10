@@ -22,4 +22,4 @@ DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
 echo "Setting up relative to ${DIR} as script folder"
 
 export lgldir="$(dirname ${DIR})"
-export lglimage="java -jar ${lgldir}/Java/jar/ImageMaker.jar"
+export lglimage="java -Djava.awt.headless=true -jar ${lgldir}/Java/jar/ImageMaker.jar"

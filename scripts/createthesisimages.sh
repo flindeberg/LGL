@@ -5,7 +5,7 @@
 
 ## Load exports
 export lgldir="$(dirname $(pwd))"
-export lglimage="java -jar ${lgldir}/Java/jar/ImageMaker.jar"
+export lglimage="java -Djava.awt.headless=true -jar ${lgldir}/Java/jar/ImageMaker.jar"
 export runfolder="../testrun"
 
 function generategraph(){
