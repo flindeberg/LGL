@@ -24,6 +24,8 @@ install_perl.log
 **/*.1
 src/autom4te.cache
 testrun/bview_*/
+testrun/e2e_*/
+testrun/port_*/
 src/lglbreakup
 src/lglfileconvert
 src/lglayout
