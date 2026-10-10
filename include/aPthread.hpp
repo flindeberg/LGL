@@ -230,10 +230,14 @@ class Amutex {
 
  public:
 
-   Amutex( const pthread_mutex_t& m ) : mutex_(m) { }
-   Amutex( ) : mutex_() {  }
+   // A pthread mutex must be initialized with pthread_mutex_init. A
+   // zero-filled one only happens to work on glibc; on macOS locking it
+   // fails with EINVAL and nothing is locked. Mutex state is never
+   // copied: each copy gets its own unlocked mutex.
+   Amutex( ) : error(0) { pthread_mutex_init(&mutex_, 0); }
+   Amutex( const Amutex& ) : error(0) { pthread_mutex_init(&mutex_, 0); }
 
-   void copy( const Amutex& m ) { mutex_=m.mutex_; }
+   void copy( const Amutex& ) { }
 
    int lock() { 
      return pthread_mutex_lock(&mutex_); 
@@ -251,7 +255,7 @@ class Amutex {
      Amutex::copy(m); return *this;
    }
 
-   virtual ~Amutex() { }
+   virtual ~Amutex() { pthread_mutex_destroy(&mutex_); }
 
 };
 
