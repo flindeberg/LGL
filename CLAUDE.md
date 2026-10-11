@@ -19,7 +19,7 @@ general-purpose library.
   `LGLView.jar` (interactive 2D viewer), `ImageMaker.jar` (renders layout
   coordinates to large PNGs, up to 46340×46340px — limited by
   `java.awt.image.Raster`'s `Integer.MAX_VALUE` pixel-count cap). Built via
-  `Java/build.sh`.
+  `make -C Java jarfiles` (javac `--release 11`).
 - **`perls/`** — Perl glue layer. `lgl.pl` is the driver script that calls
   the compiled C++ binaries; `LGLFormatHandler.pm` parses input edge files
   (ncol format: whitespace-delimited `<node1> <node2>` per line, plus other
@@ -38,8 +38,9 @@ general-purpose library.
   - `create_run.sh <name>` → `bootstrap.sh` (parse+layout) → `run.sh`
     (drives `lgl.pl`, generates color file, renders PNG via `ImageMaker.jar`).
   - `parsebview.sh` parses each dump in parallel with `bin/bviewpairs`
-    and sums the counts. `get_neigh.py`/`get_pairs.py` are the old
-    bgpdump-based helpers it replaced; bviewpairs mirrors their semantics.
+    and sums the counts. It replaced a bgpdump + Python pipeline
+    (`get_neigh.py`/`get_pairs.py`, removed, see README) whose semantics
+    bviewpairs mirrors exactly.
 - **`tools/bviewpairs/`** — Rust (bgpkit-parser) tool: one MRT dump on
   stdin → AS–AS and prefix–AS pair counts. Same output as the old
   bgpdump pipeline except IPv6 prefixes are RFC 5952 formatted.
@@ -58,8 +59,9 @@ make install    # jars, bviewpairs (cargo), C++ via setup.pl -i, all into ./bin
 ```
 
 Requires: C++ compiler + Boost (Homebrew's is found automatically), Rust
-(cargo), Perl 5+, Java 11+ (jars are built with `--release 11`), Python 3,
+(cargo), Perl 5+, Java 11+ (jars are built with `--release 11`), zsh/curl/wget,
 an X server only for the interactive viewers (ImageMaker runs headless).
+bgpdump and Python are no longer used.
 
 CI (`.github/workflows/`) builds C++ (`make -C src all`), builds the Java
 jars, then does a full `make install` + `creategraphfromdate.sh 2000 09` run

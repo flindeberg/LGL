@@ -19,13 +19,14 @@ Much thanks to the Marcotte lab for testing.
 # 0
 
 You must have javac and jar in your path to compile JAVA programs. If you don't the
-compiles will fail. Examine the build.sh file in this directory, and modify the variable
-$JAVABINPATH. This variable is only important for the compilation process.
+compiles will fail. (This fork removed the old build.sh, which pointed at JDK 1.5;
+use the Makefile instead.)
 
 ######################################
 # I
 
-Change in to the same directory that this README is in and run ./build.sh
+Change in to the same directory that this README is in and run `make jarfiles`
+(or `make` in the repository root). Classes are compiled with `javac --release 11`.
 
 This should produce 3 .jar files
 
