@@ -154,8 +154,10 @@ on current toolchains (macOS on Apple Silicon and current Ubuntu) and to make a 
   10 threads: about 13% and 17% less wall time). On top of that, forces are summed per
   voxel pair before the atomic add, and only the voxels around the layout are visited
   instead of the whole (much larger) grid: another 18-27% less wall time (2000, 2001,
-  2025). For 2025 the longest edges came out 2-4% longer over two runs each, within what
-  a re-run of the layout can vary; the images look alike.
+  2025). For 2025 the longest edges (p90) came out 2-4% longer and slightly fewer nodes
+  sat very close together, just outside the spread of two runs of the old code; more runs
+  would tell whether that is real. Median edge lengths are unchanged and the images look
+  alike.
 - `creategraphfromdate.sh` uses every RIS collector that exists (rrc25 and newer were
   previously left out) instead of a fixed rrc00-rrc24.
 
