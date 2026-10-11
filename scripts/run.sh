@@ -57,7 +57,7 @@ rm -rf $tmpdir && mkdir $tmpdir
 if hash lscpu 2>/dev/null; then
 	threads=$(lscpu -p | egrep -v '^#' | wc -l)
 else
-	threads=$(sysctl -n hw.ncpu)
+	threads=$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu)
 fi
 
 threads=$(((threads-2)>2 ? (threads-2) : 2))

@@ -28,6 +28,7 @@ src/autom4te.cache
 testrun/bview_*/
 testrun/e2e_*/
 testrun/port_*/
+testrun/september_series/
 src/lglbreakup
 src/lglfileconvert
 src/lglayout
