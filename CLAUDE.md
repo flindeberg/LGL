@@ -27,15 +27,22 @@ general-purpose library.
   the viewer based on hierarchy depth.
 - **`scripts/`** — thesis-specific pipeline layered on top of generic LGL:
   downloads BGP RIB dumps (RIPE RIS `bview.*.gz` files), converts them with
-  `bgpdump` + `parsebview.sh` into ncol graphs, then runs the full
-  layout+render pipeline. Key entry points:
-  - `creategraphfromdate.sh <year> <month>` — one-liner, fetches a RIPE dump
-    for that month and produces a full graph+image.
+  `parsebview.sh` into ncol graphs, then runs the full layout+render
+  pipeline. Key entry points:
+  - `creategraphfromdate.sh <year> <month>` — one-liner, fetches the last
+    dump of that month from every RIS collector and produces a full
+    graph+image.
+  - `createseptemberseries.sh [first] [last]` — the same for September of
+    every year (default 2000–now), deleting dumps once parsed (disk).
   - `creategraphfromurl.sh <url>` — same, from an arbitrary bview URL.
   - `create_run.sh <name>` → `bootstrap.sh` (parse+layout) → `run.sh`
     (drives `lgl.pl`, generates color file, renders PNG via `ImageMaker.jar`).
-  - Python variants (`get_neigh.py`, `get_pairs.py`) are ~3x faster than
-    their bash equivalents for the same parsing step.
+  - `parsebview.sh` parses each dump in parallel with `bin/bviewpairs`
+    and sums the counts. `get_neigh.py`/`get_pairs.py` are the old
+    bgpdump-based helpers it replaced; bviewpairs mirrors their semantics.
+- **`tools/bviewpairs/`** — Rust (bgpkit-parser) tool: one MRT dump on
+  stdin → AS–AS and prefix–AS pair counts. Same output as the old
+  bgpdump pipeline except IPv6 prefixes are RFC 5952 formatted.
 - **`setup.pl -i`** — orchestrates compiling the C++ and Java pieces and
   installing binaries into `./bin`.
 - **`resources/images/`** — example rendered output (e.g.
@@ -46,13 +53,13 @@ general-purpose library.
 ## Build
 
 ```
-make            # builds Java jars + C++ binaries
-make install    # also runs setup.pl -i, installs into $(PROJECTDIR)/bin
+make            # default target: Java jars only
+make install    # jars, bviewpairs (cargo), C++ via setup.pl -i, all into ./bin
 ```
 
-Requires: C++ compiler + Boost (version-sensitive — not fully future-proofed),
-`bgpdump` (compile from source on Debian-likes, packaged version is often
-broken), Perl 5+, Java 8+, Python 3, an X server for the graphical viewers.
+Requires: C++ compiler + Boost (Homebrew's is found automatically), Rust
+(cargo), Perl 5+, Java 11+ (jars are built with `--release 11`), Python 3,
+an X server only for the interactive viewers (ImageMaker runs headless).
 
 CI (`.github/workflows/`) builds C++ (`make -C src all`), builds the Java
 jars, then does a full `make install` + `creategraphfromdate.sh 2000 09` run
