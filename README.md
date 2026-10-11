@@ -63,7 +63,8 @@ A heap of stuff, in no particular order:
 - zsh, curl and wget for the download scripts
 - Xserver installed for the interactive viewer only (works well under WSL 2 in Windows); `ImageMaker` runs headless
 
-bgpdump and Python are no longer needed (see below).
+bgpdump and Python are no longer needed by the pipeline (see below). Performance notes and
+remaining optimization ideas are in `doc/optimization.md`.
 
 # Installation
 

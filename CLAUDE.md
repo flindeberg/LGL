@@ -61,7 +61,7 @@ make install    # jars, bviewpairs (cargo), C++ via setup.pl -i, all into ./bin
 Requires: C++ compiler + Boost (Homebrew's is found automatically), Rust
 (cargo), Perl 5+, Java 11+ (jars are built with `--release 11`), zsh/curl/wget,
 an X server only for the interactive viewers (ImageMaker runs headless).
-bgpdump and Python are no longer used.
+bgpdump is no longer used; Python 3 only for the dev tool `tools/layout_quality.py`.
 
 CI (`.github/workflows/`) builds C++ (`make -C src all`), builds the Java
 jars, then does a full `make install` + `creategraphfromdate.sh 2000 09` run
@@ -69,6 +69,11 @@ as an end-to-end smoke test, uploading the resulting PNG as an artifact.
 
 ## Notes for future work
 
+- **Performance:** `doc/optimization.md` has the measured profile (layout is
+  ~95% of a run), what has already been optimized, a ranked list of the
+  biggest remaining opportunities with file:line references, known bugs, and
+  how to benchmark and check layout quality (`tools/layout_quality.py`).
+  Read it before optimizing anything.
 - `run.sh` and `bootstrap.sh` have minimal error handling by design (per
   README) — don't assume a clean failure path.
 - Coloring behavior lives in `perls/colorEdgesBasedOnLevel.pl`.
