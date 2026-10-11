@@ -150,21 +150,29 @@ on current toolchains (macOS on Apple Silicon and current Ubuntu) and to make a 
   parallel. About 7-11x faster. The ncol output is byte-identical except that IPv6
   prefixes are now written in RFC 5952 form (bgpdump wrote a single zero group as `::`,
   e.g. `2001:668::3:ffff:1:0:2270` instead of `2001:668:0:3:ffff:1:0:2270`).
-- Layout: relaxed atomic force sums, vectors instead of hash sets for voxel occupants,
-  and dynamic load balancing between threads (measured separately on the 2001 graph with
-  10 threads: about 13% and 17% less wall time). On top of that, forces are summed per
-  voxel pair before the atomic add, and only the voxels around the layout are visited
-  instead of the whole (much larger) grid: another 18-27% less wall time (2000, 2001,
-  2025). For 2025 the longest edges (p90) came out 2-4% longer and slightly fewer nodes
-  sat very close together, just outside the spread of two runs of the old code; more runs
-  would tell whether that is real. Median edge lengths are unchanged and the images look
-  alike.
+- Layout: the repulsion between nearby particles, about 90% of the work, is computed from
+  a flat per-iteration copy of the particles in each voxel (a cell list) with a NEON kernel
+  on arm64 (four pairs at a time; a scalar loop elsewhere). Every pair is seen from both
+  sides, so each particle's force is summed by one thread without atomics, and voxels with
+  thousands of particles (hubs) are split between threads. The edge phases walk flat edge
+  lists instead of boost's edge set, and the integration takes no locks. Together with the
+  earlier steps (relaxed atomics, vector voxel occupants, dynamic load balancing) the 2000
+  and 2001 layouts take 14 and 17 s with 10 threads, against 51 and 59 s before the cell
+  list and about a minute at the start of the revival. Quality metrics (median and p90 edge
+  length, share of overlapping nodes) stay within the run-to-run spread on 2000 and 2001
+  and the images look alike; 2025 has not been re-measured with the cell list. The
+  collision noise now comes from a per-thread generator, two colliding anchors no longer
+  get noise, and the cutoff test is done in float (the force is zero at the cutoff, so a
+  pair on the boundary contributes nothing either way). `doc/optimization.md` has the
+  profile and what is left.
 - `creategraphfromdate.sh` uses every RIS collector that exists (rrc25 and newer were
   previously left out) instead of a fixed rrc00-rrc24.
 
 **Removed** (still in the git history)
 - `scripts/get_neigh.py`, `get_pairs.py`, `get_neigh.sh`, `get_pairs.sh`: replaced by bviewpairs.
 - `scripts/getpctprefix.sh`, `get_matching_bview.sh`: not used by any script.
+- `include/gridSchedual.hpp`, `voxelInteractionHandler.hpp`, `src/t/voxelInteractionTest.cpp`:
+  the old static voxel scheduling, replaced by the cell list.
 - `Java/build.sh`: pointed at JDK 1.5; use the Makefile.
 - `perls/genVrml.pl`: VRML export of 3D layouts, not used by this fork.
 

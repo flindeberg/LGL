@@ -11,8 +11,6 @@
 #include "particleStats.hpp"
 #include "aPthread.hpp"
 #include "timeKeeper.hpp"
-#include "voxelInteractionHandler.hpp"
-#include "gridSchedual.hpp"
 #include "graph.hpp"
 #include <vector>
 #include <set>
@@ -31,15 +29,12 @@ typedef ParticleContainer< Node > NodeContainer;
 typedef Grid< Node > Grid_t;
 typedef FixedVec< prec_t , DIMENSION > FixedVec_p;
 typedef FixedVec< long , DIMENSION > FixedVec_l;
-typedef GridIter< Grid_t > GridIterator;
 typedef ParticleContainerChaperone< Node > PCChaperone;
 typedef ApthreadContainer ThreadContainer;
 typedef Voxel< Node > Voxel_t;
 typedef TimeKeeper<prec_t> TimeKeeper_t;
 template < typename Particle > class ParticleInteractionHandler;
 typedef ParticleInteractionHandler< Node > NodeInteractionHandler;
-typedef VoxelInteractionHandler< Voxel_t , NodeInteractionHandler > VoxelHandler;
-typedef GridSchedual_MTS< Grid_t > GridSchedual_t;
 typedef ParticleStats< Node > ParticleStats_t;
 typedef Graph< prec_t > Graph_t;
 typedef vector< unsigned > LevelMap;

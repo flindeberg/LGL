@@ -23,6 +23,7 @@
 #include <boost/lexical_cast.hpp>
 #include <boost/foreach.hpp>
 
+#include <chrono>
 #include "thread_pool.hpp"
 #include "particleInteractionHandler.hpp"
 #include "calcFuncs.h"
@@ -30,51 +31,120 @@
 using namespace boost;
 
 //---------------------------------------------------------------
+// Where the time goes, printed to stderr after each simulation
+// pass. Cheap enough to keep on: a few clock reads per iteration.
+
+typedef std::chrono::steady_clock prof_clock;
+static double profSeconds( prof_clock::time_point a , prof_clock::time_point b ) {
+  return std::chrono::duration<double>( b - a ).count();
+}
+static double profInteractions = 0, profInteractionsBusy = 0, profEdges = 0,
+  profIntegrate = 0, profStats = 0, profOther = 0, profPack = 0;
+static long profIterations = 0, profThreads = 0;
+static unsigned long long profPairs = 0;
+static void printProfile( std::ostream& o ) {
+  double total = profPack + profInteractions + profEdges + profIntegrate + profStats + profOther;
+  o << "\nPhase times over " << profIterations << " iterations (" << total << " s):\n"
+    << "  repulsion " << profInteractions << " s, thread utilisation "
+    << ( profThreads * profInteractions > 0 ? 100.0 * profInteractionsBusy / ( profThreads * profInteractions ) : 0 ) << "%\n"
+    << "  pair tests " << profPairs << " (" << 1e9 * profInteractionsBusy / ( profPairs ? profPairs : 1 ) << " ns each)\n"
+    << "  pack " << profPack << " s, edges " << profEdges << " s, integrate " << profIntegrate
+    << " s, stats " << profStats << " s, other " << profOther << " s\n";
+}
+
+//---------------------------------------------------------------
+
+void * packCells ( void * arg_ )
+{
+  ThreadArgs * args = static_cast<ThreadArgs*>(arg_);
+  CellList& cells = *(args->cells);
+  const Grid_t& grid = *(args->grid);
+  const long chunk = 64;
+  for ( long start; (start = args->nextVoxel->fetch_add( chunk )) < cells.boxSize; ) {
+    cells.fill( grid , start , std::min( start + chunk , cells.boxSize ) );
+  }
+  return args;
+}
+
+//---------------------------------------------------------------
 
 void * calcInteractions ( void * arg_ )
 {
   //cout << "VoxelInteractions" << endl;  
   ThreadArgs * args = static_cast<ThreadArgs*>(arg_);
-  GridIterator& grid_i = *(args->gridIterator);
-  VoxelHandler& vh = *(args->voxelHandler);
-  args->nodeHandler->springConstant( args->casualSpringConstant );
-  //const Graph_t& layout_graph = *(args->layout_graph);
-  //layout_graph.print();
-  // Only voxels inside the active box can hold particles; the grid itself
-  // is hundreds of times larger than the layout. Walk the box row by row
-  // and take chunks of voxels until all are done. Voxels differ a lot in
-  // how many particles they hold, so the work is balanced dynamically.
-  // Forces are atomic, so any thread can handle any voxel.
-  const FixedVec_l& lo = *(args->activeMin);
-  const FixedVec_l& hi = *(args->activeMax);
-  long extent[DIMENSION];
-  long boxSize = 1;
+  const CellList& cells = *(args->cells);
+  NodeInteractionHandler& nih = *(args->nodeHandler);
+  // The force on every particle of a work unit (up to CellList::UNIT
+  // particles of one voxel) from all particles in its voxel and the
+  // neighbouring ones. Every pair is visited from both sides, which is
+  // about twice the pair tests of a half shell, but each particle's force
+  // is summed by one thread and written once: no atomics, no locks.
+  // Threads take chunks of units until all are done.
+  PairParams pp;
+  pp.eq = args->nbhdRadius;
+  pp.eq2 = sqr( pp.eq );
+  pp.k = args->casualSpringConstant;
+  const EllipseFactors& ef = args->ellipseFactors;
   for ( unsigned int d=0; d<DIMENSION; ++d ) {
-    extent[d] = hi[d] - lo[d] + 1;
-    boxSize *= extent[d] > 0 ? extent[d] : 0;
+    pp.ef[d] = ef.empty() ? 1 : ( d < ef.size() ? ef[d] : ef.back() );
   }
   const long chunk = 16;
-  FixedVec_l voxel;
-  for ( long start; (start = args->nextVoxel->fetch_add( chunk )) < boxSize; )
-  for ( long ii=start; ii<start+chunk && ii<boxSize; ++ii ) {
-    long rest = ii;
-    for ( unsigned int d=0; d<DIMENSION; ++d ) {
-      voxel[d] = lo[d] + rest % extent[d];
-      rest /= extent[d];
+  const long unitCount = cells.units.size();
+  long c1[DIMENSION] , c2[DIMENSION];
+  // The blocks around the unit's voxel: offset, padded size, occupants and
+  // whether it is the voxel itself
+  struct Block { unsigned o , n , count; bool self; };
+  Block blocks[ 27 ];
+  const prof_clock::time_point t0 = prof_clock::now();
+  for ( long start; (start = args->nextVoxel->fetch_add( chunk )) < unitCount; )
+  for ( long uu=start; uu<start+chunk && uu<unitCount; ++uu ) {
+    const CellList::Unit& unit = cells.units[uu];
+    cells.coords( unit.box , c1 );
+    // All neighbours (and the voxel itself) that lie in the box; voxels
+    // outside the box are empty
+    unsigned blockCount = 0;
+    long nbhrs = 1;
+    for ( unsigned int d=0; d<DIMENSION; ++d ) { nbhrs *= 3; }
+    for ( long nn=0; nn<nbhrs; ++nn ) {
+      long rest = nn;
+      for ( unsigned int d=0; d<DIMENSION; ++d ) {
+	c2[d] = c1[d] + rest % 3 - 1;
+	rest /= 3;
+      }
+      const long b2 = cells.boxIndex( c2 );
+      if ( b2 < 0 || cells.count[b2] == 0 ) { continue; }
+      Block& bl = blocks[ blockCount++ ];
+      bl.o = cells.offset[b2];
+      bl.count = cells.count[b2];
+      bl.n = CellList::padded( bl.count );
+      bl.self = ( b2 == unit.box );
     }
-    grid_i.current( voxel );
-    Voxel_t& vox1 = grid_i.currentVox();
-    if ( ! vox1.empty() ) {
-      // Iterate through the neighbors of each voxel
-      // The first nbhr is actually the same voxel
-      while ( grid_i.incNbhr() ) {
-	Voxel_t& vox2 = grid_i.nhbrVox();
-	if ( ! vox2.empty() ) {	  
-	  vh.twoVoxelInteractions( vox1 , vox2 );
-	} 
+    const unsigned o1 = cells.offset[ unit.box ];
+    for ( unsigned i = unit.begin; i < unit.end; ++i ) {
+      const unsigned slot = o1 + i;
+      // Anchors are not moved by any force
+      if ( cells.af[slot] == 2.f ) { continue; }
+      float xi[DIMENSION];
+      for ( unsigned int d=0; d<DIMENSION; ++d ) { xi[d] = cells.x[d][slot]; }
+      const float ri = cells.r[slot];
+      float f[DIMENSION];
+      for ( unsigned int d=0; d<DIMENSION; ++d ) { f[d] = 0; }
+      for ( unsigned bb=0; bb<blockCount; ++bb ) {
+	const Block& bl = blocks[bb];
+	const long skip = bl.self ? (long) i : -1;
+	// Particles on top of each other give noise instead of a force,
+	// once per colliding partner
+	args->pairTests += bl.n;
+	unsigned collisions = repulsionFromBlock( cells , bl.o , bl.n , skip , xi , ri , pp , f );
+	while ( collisions-- ) { nih.noise( f ); }
+      }
+      Node& q = *cells.p[slot];
+      for ( unsigned int d=0; d<DIMENSION; ++d ) {
+	q.f[d].store( f[d] , boost::memory_order_relaxed );
       }
     }
   }
+  args->busySeconds += profSeconds( t0 , prof_clock::now() );
   return args;
 }
 
@@ -82,30 +152,29 @@ void * calcInteractions ( void * arg_ )
 
 void * integrateParticles ( void * arg_ )
 {
-  typedef Graph_t::vertex_iterator Vi;
   //cout << "integrateParticles" << endl;
   ThreadArgs& args = *(static_cast<ThreadArgs*>(arg_));  
-  long whichThread = args.whichThread;
-  long threadCount = args.threadCount;
+  const long whichThread = args.whichThread;
+  const long threadCount = args.threadCount;
   NodeContainer& nodes = *(args.nodes);
   Grid_t& grid = *(args.grid);
   NodeInteractionHandler& nih = *(args.nodeHandler);
   const Graph_t& layout_graph = *(args.layout_graph);
   const LevelMap& levels = *(args.levels);
-  unsigned int currentLevel = args.currentLevel;
-  Vi v, vend;
+  const unsigned int currentLevel = args.currentLevel;
   emptyBox( args.boxMin , args.boxMax );
-  int vertexCount = num_vertices( layout_graph.boostGraph() );
-  tie( v , vend ) = vertices( layout_graph.boostGraph() );
-  if ( whichThread != 0 ) { std::advance( v , whichThread ); }
-  for ( int vctr = whichThread; vctr<vertexCount; vctr+=threadCount ) {
-    if ( vctr != whichThread ) { std::advance( v , threadCount ); }
-    //cout << *v << " " << levels.size() << endl;
-    if ( levels[*v] > currentLevel ) { continue; }
-    //cout << *v << " -" << endl;
-    Node& n = nodes[ *v ];
-    nih.enforceFLimit( n ); 
-    nih.integrate( n );
+  // Each thread takes a contiguous block of vertices (vertex descriptors
+  // are 0..n-1), so the particles it writes share no cache lines with
+  // another thread's.
+  const long vertexCount = num_vertices( layout_graph.boostGraph() );
+  const long begin = vertexCount * whichThread / threadCount;
+  const long end = vertexCount * ( whichThread + 1 ) / threadCount;
+  for ( long v = begin; v < end; ++v ) {
+    if ( levels[v] > currentLevel ) { continue; }
+    Node& n = nodes[ v ];
+    // Limit the force, move the particle and zero the force for the next
+    // iteration
+    nih.clampIntegrateAndResetForce( n );
     // This is an edge of the grid check.
     if ( grid.checkInclusion( n.X() ) ) { shift_particle( n , grid ); }
     else {
@@ -115,9 +184,6 @@ void * integrateParticles ( void * arg_ )
     if ( n.container() >= 0 ) {
       addVoxelToBox( grid , n.container() , args.boxMin , args.boxMax );
     }
-    // Reset the forces to zero for next 
-    // iteration
-    n.F(0);
   }
   return arg_;
 }
@@ -127,37 +193,19 @@ void * integrateParticles ( void * arg_ )
 void * collectEdgeStats( void * arg_ )
 {
   //cout << "collectingStats" << endl;
-  typedef Graph_t::edge_iterator Ei;
-  typedef Graph_t::vertex_descriptor vertex_descriptor;
   ThreadArgs& args = *(static_cast<ThreadArgs*>(arg_));
-  const unsigned int currentLevel = args.currentLevel;
-  const LevelMap& levels = *(args.levels);
-  NodeContainer& nodes = *(args.nodes);
-  long whichThread = args.whichThread;
-  long threadCount = args.threadCount;
-  const Graph_t& layout_graph = *(args.layout_graph);
-  int edgeCount = num_edges( layout_graph.boostGraph() );
-  int ctr = 0;
+  const NodeContainer& nodes = *(args.nodes);
+  const EdgeList& edges = *(args.levelEdges);
+  const EdgeList::size_type begin = edges.size() * args.whichThread / args.threadCount;
+  const EdgeList::size_type end = edges.size() * ( args.whichThread + 1 ) / args.threadCount;
   prec_t dx = 0;
-  Ei ei , eend;
-  tie( ei , eend ) = edges( layout_graph.boostGraph() );
-  if ( whichThread != 0 ) { std::advance( ei , whichThread ); }
-  for ( int ectr = whichThread; ectr<edgeCount; ectr+=threadCount )
-    {
-      if ( ectr != whichThread ) { std::advance( ei , threadCount ); }
-      vertex_descriptor v1 = source( *ei , layout_graph.boostGraph() );
-      vertex_descriptor v2 = target( *ei , layout_graph.boostGraph() );
-      if ( levels[ v1 ] == currentLevel ||
-	   levels[ v2 ] == currentLevel )
-	{
-	  const Node& n1 = nodes[ v1 ];
-	  const Node& n2 = nodes[ v2 ];
-	  dx += n1.X().distance( n2.X() );
-	  ++ctr;
-	}
-    }
+  for ( EdgeList::size_type ii = begin; ii < end; ++ii ) {
+    const Node& n1 = nodes[ edges[ii].first ];
+    const Node& n2 = nodes[ edges[ii].second ];
+    dx += n1.X().distance( n2.X() );
+  }
   args.stats->add2Stats_dx( dx );
-  args.stats->count( ctr );  
+  args.stats->count( end - begin );
   return arg_;
 }
 
@@ -166,30 +214,47 @@ void * collectEdgeStats( void * arg_ )
 void * onlyEdgeInteractions( void * arg_ )
 {
   //cout << "onlyEdgeInteractions" << endl;
-  typedef Graph_t::edge_iterator Ei;
   ThreadArgs& args = *(static_cast<ThreadArgs*>(arg_));
   NodeContainer& nodes = *(args.nodes);
-  long whichThread = args.whichThread;
-  long threadCount = args.threadCount;
   NodeInteractionHandler& nih = *(args.nodeHandler);
   nih.springConstant( args.specialSpringConstant );
-  const Graph_t& layout_graph = *(args.layout_graph);
-  int edgeCount = num_edges( layout_graph.boostGraph() );
-  Ei ei , eend;
-  tie( ei , eend ) = edges( layout_graph.boostGraph() );
-  if ( whichThread != 0 ) { std::advance( ei , whichThread ); }
-  for ( int ectr = whichThread; ectr<edgeCount; ectr+=threadCount )
-    {
-      if ( ectr != whichThread ) { std::advance( ei , threadCount ); }
-      Node& n1 = nodes[ source( *ei , layout_graph.boostGraph() ) ];
-      Node& n2 = nodes[ target( *ei , layout_graph.boostGraph() ) ];
-      prec_t d = euclideanDistance( n1.X().begin() , n1.X().end() ,
-				    n2.X().begin() );
-      if ( d > nih.eqDistance() ) {
-	nih.springRepulsiveInteraction( n1 , n2 );
-      }
+  const EdgeList& edges = *(args.edges);
+  const EdgeList::size_type begin = edges.size() * args.whichThread / args.threadCount;
+  const EdgeList::size_type end = edges.size() * ( args.whichThread + 1 ) / args.threadCount;
+  for ( EdgeList::size_type ii = begin; ii < end; ++ii ) {
+    Node& n1 = nodes[ edges[ii].first ];
+    Node& n2 = nodes[ edges[ii].second ];
+    prec_t d = euclideanDistance( n1.X().begin() , n1.X().end() ,
+				  n2.X().begin() );
+    if ( d > nih.eqDistance() ) {
+      nih.springRepulsiveInteraction( n1 , n2 );
     }
+  }
   return arg_;
+}
+
+//---------------------------------------------------------------
+
+// The edge lists the threads work from: every edge of the layout graph,
+// and the edges with an end at the current level.
+static void buildEdgeLists( const Graph_t& g , const LevelMap& levels ,
+			    unsigned int currentLevel ,
+			    EdgeList& all , EdgeList& levelEdges )
+{
+  typedef Graph_t::edge_iterator Ei;
+  const Graph_t::boost_graph& bg = g.boostGraph();
+  all.clear();
+  levelEdges.clear();
+  all.reserve( num_edges( bg ) );
+  Ei ei , eend;
+  for ( tie( ei , eend ) = edges( bg ); ei != eend; ++ei ) {
+    const unsigned v1 = source( *ei , bg );
+    const unsigned v2 = target( *ei , bg );
+    all.push_back( std::make_pair( v1 , v2 ) );
+    if ( levels[v1] == currentLevel || levels[v2] == currentLevel ) {
+      levelEdges.push_back( std::make_pair( v1 , v2 ) );
+    }
+  }
 }
  
 //--------------------------------------------------------------
@@ -208,6 +273,15 @@ void beginSimulation( ThreadContainer& threads ,
   Grid_t& grid = *(threadArgs->grid);
   long threadCount = threads.size();
   unsigned int currentLevel = 1;
+  profThreads = threadCount;
+  prof_clock::time_point tLevel = prof_clock::now(), tA , tB;
+  EdgeList edges , levelEdges;
+  CellList cells;
+  for ( long ii=0; ii<threadCount; ++ii ) {
+    threadArgs[ii].edges = &edges;
+    threadArgs[ii].levelEdges = &levelEdges;
+    threadArgs[ii].cells = &cells;
+  }
 
   thread_pool threadpool( threadCount );
   std::vector< std::future< void > > futures;
@@ -231,23 +305,47 @@ void beginSimulation( ThreadContainer& threads ,
     } else {
       currentLevel = totalLevels;
     }
+    buildEdgeLists( current_layout , levels , currentLevel , edges , levelEdges );
 
     prec_t avgPrevious = 0.0;
     prec_t dx = 10000000.; 
     int iterationCtr = 0; 
+    long levelNodes = 0;
+    for ( LevelMap::size_type ii=0; ii<levels.size(); ++ii ) {
+      if ( levels[ii] == currentLevel ) { ++levelNodes; }
+    }
+    tA = prof_clock::now();
+    profOther += profSeconds( tLevel , tA );
 
     do { 
+
+      // Pack the particles of the active box for the repulsion phase
+      cells.prepare( grid , *(threadArgs[0].activeMin) , *(threadArgs[0].activeMax) );
+      threadArgs[0].nextVoxel->store( 0 );
+      for ( long ii=0; ii<threadCount; ++ii ) {
+	futures.push_back( threadpool.run( packCells ,
+			    static_cast<void *>(&threadArgs[ii]) ) );
+      }
+		wait_for_futures();
+      tB = prof_clock::now(); profPack += profSeconds( tA , tB ); tA = tB;
 
       // Repulsive terms
       threadArgs[0].nextVoxel->store( 0 );
       for ( long ii=0; ii<threadCount; ++ii ) {
+	threadArgs[ii].busySeconds = 0;
+	threadArgs[ii].pairTests = 0;
 	threadArgs[ii].currentLevel = currentLevel;
-	threadArgs[ii].nodeHandler->springConstant( threadArgs[ii].casualSpringConstant );
-	threadArgs[ii].nodeHandler->eqDistance( threadArgs[ii].nbhdRadius );
 	futures.push_back( threadpool.run( calcInteractions , 
 			    static_cast<void *>(&threadArgs[ii]) ) );
       }
 		wait_for_futures();
+      tB = prof_clock::now();
+      profInteractions += profSeconds( tA , tB );
+      for ( long ii=0; ii<threadCount; ++ii ) {
+	profInteractionsBusy += threadArgs[ii].busySeconds;
+	profPairs += threadArgs[ii].pairTests;
+      }
+      tA = tB;
 
       // Attractive terms
       for ( long ii=0; ii<threadCount; ++ii ) {
@@ -257,6 +355,7 @@ void beginSimulation( ThreadContainer& threads ,
 			    static_cast<void *>(&threadArgs[ii]) ) );
       }
 		wait_for_futures();
+      tB = prof_clock::now(); profEdges += profSeconds( tA , tB ); tA = tB;
 
       // Integrate for next time step
       for ( long ii=0; ii<threadCount; ++ii ) {
@@ -264,6 +363,7 @@ void beginSimulation( ThreadContainer& threads ,
 			    static_cast<void *>(&threadArgs[ii]) ) ); 
       }
 		wait_for_futures();
+      tB = prof_clock::now(); profIntegrate += profSeconds( tA , tB ); tA = tB;
 
       // The voxels that can hold particles in the next iteration
       *(threadArgs[0].activeMin) = *(threadArgs[0].staticMin);
@@ -279,6 +379,8 @@ void beginSimulation( ThreadContainer& threads ,
 			    static_cast<void *>(&threadArgs[ii]) ) );
       }
 		wait_for_futures();
+      tB = prof_clock::now(); profStats += profSeconds( tA , tB ); tA = tB;
+      ++profIterations;
 
       prec_t dxNew = collectOutput( &threadArgs[0] , chaperone ); 
       if ( ! silentOutput ) {
@@ -308,10 +410,19 @@ void beginSimulation( ThreadContainer& threads ,
       
     } while ( timer.rangeCheck() );
 
+    tB = prof_clock::now();
+    profOther += profSeconds( tA , tB );
+    if ( ! silentOutput ) {
+      std::cerr << "\nLevel " << currentLevel << ": " << levelNodes << " nodes, "
+		<< iterationCtr + 1 << " iterations, " << profSeconds( tLevel , tB ) << " s";
+    }
+    tLevel = tB;
+
     ++currentLevel;
 
   } // End of iterative layout.
 
+  printProfile( std::cerr );
 }
 
 //----------------------------------------------------------

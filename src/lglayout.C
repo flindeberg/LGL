@@ -177,17 +177,10 @@ try
   cout << "Done." << endl;
 
   cout << "Initializing handlers..."; cout.flush();
-  VoxelHandler vh;
   NodeInteractionHandler nh;
   nh.timeStep( timer.timeStep() );
   nh.noiseAmplitude( 1.0 );
-  GridSchedual_t schedual(grid);
-  bool acceptable = schedual.threads( processorCount );
-  long threadCount = schedual.threads();
-  while ( !acceptable ) {
-    acceptable = schedual.threads( --threadCount );
-  }
-  schedual.generateVoxelList_MT();
+  long threadCount = processorCount > 0 ? processorCount : 1;
   cout << "Done." << endl;
 
   // First generate the tree to guide the layout
@@ -288,17 +281,12 @@ try
       current.grid = &grid;
       current.nbhdRadius = nbhdRadius;
       current.threadCount = threadCount;
-      current.voxelList = new FixedVec_l[grid.size()/threadCount+1];
-      current.voxelListSize = 
-	schedual.getVoxelList( threadCtr , current.voxelList );
       current.activeMin = &activeMin;
       current.activeMax = &activeMax;
       current.staticMin = &staticMin;
       current.staticMax = &staticMax;
       current.nextVoxel = &nextVoxel;
       current.whichThread = threadCtr;
-      current.gridIterator = new GridIterator(grid);
-      current.gridIterator->id(threadCtr);
       current.stats = new ParticleStats_t();
       current.casualSpringConstant = casualSpringConstant;
       current.specialSpringConstant = specialSpringConstant;
@@ -309,9 +297,6 @@ try
 				       static_cast<prec_t>(timer.timeStep()) );
       current.nodeHandler->eqDistance( eqDistance );
       current.nodeHandler->ellipseFactors( ellipseFactors );
-      current.voxelHandler = new VoxelHandler(vh);
-      current.voxelHandler->id(threadCtr);
-      current.voxelHandler->interactionHandler(*(current.nodeHandler));
       current.full_graph = &G;
       current.layout_graph = &lG;
       current.levels = &levels;

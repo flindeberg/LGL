@@ -100,6 +100,10 @@ public:
     return particles_[ entry ];
   }
 
+  const Particle& operator[] ( size_type entry ) const {
+    return particles_[entry];
+  }
+
   Particle& operator[] ( size_type entry ) {
     return PC_::particle(entry);
   }

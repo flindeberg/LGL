@@ -26,6 +26,7 @@
 #include <iostream>
 #include <cmath>
 #include <cstdlib>
+#include <cstdint>
 
 #include <boost/algorithm/cxx11/all_of.hpp>
 
@@ -56,6 +57,17 @@ public:
   precision noiseAmplitude_;
   EllipseFactors ellipseFactors_;
   int id_;
+  // Generator for the collision noise, one per handler (one per thread).
+  // std::rand() has one state for all threads: a data race on macOS, a
+  // lock on glibc. xorshift64*; the state is never 0.
+  mutable uint64_t rngState_ = 0x9E3779B97F4A7C15ull;
+
+  uint32_t nextRandom() const {
+    uint64_t x = rngState_;
+    x ^= x >> 12; x ^= x << 25; x ^= x >> 27;
+    rngState_ = x;
+    return (uint32_t) ( ( x * 0x2545F4914F6CDD1Dull ) >> 32 );
+  }
 
 #if 0	// unused function, if becomes used in the future it needs to change to account for Particle::F()[ii] being atomic
   // This encourages pass throughs by giving a boost to whatever
@@ -114,7 +126,10 @@ public:
   }
 
   int id() const { return id_; }
-  void id ( int i ) { id_=i; }
+  void id ( int i ) {
+    id_=i;
+    rngState_ = ( 0x9E3779B97F4A7C15ull * (uint64_t) ( i + 1 ) ) | 1;
+  }
 
   precision timeStep() const { return timeStep_; }
   void timeStep( precision t ) { timeStep_=t; }
@@ -145,23 +160,48 @@ public:
     // p1.print(cout);
    }
 
+  // enforceFLimit, integrate and a reset of the force in one pass over a
+  // local copy of the force. Used by the integration phase, where each
+  // particle belongs to one thread, so there is no lock and the atomics
+  // are accessed relaxed. The arithmetic is the same as in enforceFLimit
+  // and integrateFirstOrder.
+  void clampIntegrateAndResetForce( Particle& p1 ) const {
+    for ( unsigned int ii=0; ii<dimension; ++ii ) {
+      precision fi = p1.f[ii].load( boost::memory_order_relaxed );
+      if ( fi > forceConstraint_ ) {
+	fi = forceConstraint_;
+      } else if ( fi < -1.0 * forceConstraint_ ) {
+	fi = -1.0*forceConstraint_;
+      }
+      precision finc = fi * timeStep_;
+      if ( finc < 0 ) { finc = -min<precision>((precision).05,abs(finc)); }
+      else { finc = min<precision>((precision).05,finc); }
+      p1.x[ii] += finc;
+      p1.f[ii].store( 0 , boost::memory_order_relaxed );
+    }
+  }
+
   void noiseAmplitude( precision n ) { noiseAmplitude_=n; }
   precision noiseAmplitude() const { return noiseAmplitude_; }
   
-  void addNoise( Particle& p1 ) const {
-    precision factor = noiseAmplitude_;
-    typename Particle::vec_type noise;
-    constexpr precision divisor = RAND_MAX + 1.0;
-    constexpr int rand_half = ( RAND_MAX + 1u ) / 2;
+  // Adds noise to f: in each dimension a random sign times a random
+  // magnitude in [0, noiseAmplitude)
+  void noise( precision f[dimension] ) const {
     for ( unsigned d=0; d<dimension; ++d ) {
-      if ( std::rand() < rand_half )
-         factor = -factor;
-      noise[d] = factor * (((precision)std::rand()) / divisor);
-    }    
+      const precision sign = ( nextRandom() & 1 ) ? -1 : 1;
+      const precision u = (precision) ( nextRandom() >> 8 ) / (precision) ( 1u << 24 );
+      f[d] += sign * noiseAmplitude_ * u;
+    }
+  }
+
+  void addNoise( Particle& p1 ) const {
+    precision n[dimension];
+    for ( unsigned d=0; d<dimension; ++d ) { n[d] = 0; }
+    noise( n );
+    typename Particle::vec_type noiseVec;
+    for ( unsigned d=0; d<dimension; ++d ) { noiseVec[d] = n[d]; }
     // no need to lock because particle's force constituents are atomic
-    //p1.lock();
-    p1.add2F( noise );
-    //p1.unlock();
+    p1.add2F( noiseVec );
   }
 
   void ellipseFactors( EllipseFactors ef ) {

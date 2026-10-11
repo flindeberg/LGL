@@ -9,6 +9,7 @@
 #include "configs.h"
 #include "fixedVecOperations.hpp"
 #include "sphere.hpp"
+#include "cellList.hpp"
 #include <iostream>
 #include <iomanip>
 #include <boost/graph/adjacency_list.hpp>
@@ -25,6 +26,10 @@
 
 using namespace boost;
 typedef adjacency_list< vecS, vecS, directedS > out_graph;
+// Edges as pairs of vertex indices. The threads walk these instead of the
+// boost graph's edge set: a contiguous block each, no std::advance through
+// the whole set per thread.
+typedef std::vector< std::pair< unsigned , unsigned > > EdgeList;
 
 //------------------------------------------------
 
@@ -56,25 +61,31 @@ inline void growBox( const FixedVec_l& lo2 , const FixedVec_l& hi2 ,
 struct ThreadArgs
 {
   NodeContainer * nodes;
-  VoxelHandler * voxelHandler;
   NodeInteractionHandler * nodeHandler;
-  FixedVec_l * voxelList;
   ParticleStats_t * stats;
-  long voxelListSize;
+  // The particles of the active box, packed for the repulsion phase
+  // (shared by all threads, rebuilt every iteration)
+  CellList * cells;
   // Voxels that can hold particles lie inside the box activeMin..activeMax
   // (shared by all threads). It is the union of staticMin..staticMax, the
   // particles placed before the simulation (root, anchors, -x), and the
   // per-thread boxMin..boxMax of the particles each thread integrated.
-  // Threads take chunks of the box through nextVoxel, so the work is
+  // Threads take chunks of work through nextVoxel, so the work is
   // balanced dynamically.
   FixedVec_l boxMin, boxMax;
   FixedVec_l * activeMin, * activeMax;
   FixedVec_l * staticMin, * staticMax;
   std::atomic<long> * nextVoxel;
+  double busySeconds; // time this thread spent working in calcInteractions
+  unsigned long long pairTests; // pair tests in calcInteractions (profile)
+  // All edges of the layout graph so far, and those touching the current
+  // level (the only ones that count for the convergence statistic). Shared
+  // by all threads, rebuilt when a level is added.
+  const EdgeList * edges;
+  const EdgeList * levelEdges;
   Grid_t * grid;
   prec_t eqDistance;
   EllipseFactors ellipseFactors;
-  GridIterator * gridIterator;
   long threadCount;
   long whichThread;
   prec_t nbhdRadius;
@@ -89,6 +100,7 @@ struct ThreadArgs
 
 //------------------------------------------------
 
+void * packCells ( void * arg );
 void * calcInteractions ( void * arg );
 void * integrateParticles ( void * arg );
 void * onlyEdgeInteractions( void * arg );
