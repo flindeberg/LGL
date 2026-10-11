@@ -304,6 +304,15 @@ try
     }
   cout << "Done." << endl;
 
+  // Whether the pair kernel can take the radius as a constant
+  bool uniformRadius = true;
+  for ( NodeContainer::size_type ii=1; ii<nodes.size(); ++ii ) {
+    if ( nodes[ii].radius() != nodes[0].radius() ) { uniformRadius = false; break; }
+  }
+  for ( long threadCtr=0; threadCtr<threadCount; ++threadCtr ) {
+    threadArgs[threadCtr].uniformRadius = uniformRadius;
+  }
+
   bool givenCoords = false;
   if ( initPosFile != 0 ) { 
     givenCoords = true; 

@@ -85,15 +85,20 @@ void * calcInteractions ( void * arg_ )
   pp.eq2 = sqr( pp.eq );
   pp.k = args->casualSpringConstant;
   const EllipseFactors& ef = args->ellipseFactors;
+  pp.plain = args->uniformRadius;
   for ( unsigned int d=0; d<DIMENSION; ++d ) {
     pp.ef[d] = ef.empty() ? 1 : ( d < ef.size() ? ef[d] : ef.back() );
+    if ( pp.ef[d] != 1 ) { pp.plain = false; }
   }
   const long chunk = 16;
   const long unitCount = cells.units.size();
   long c1[DIMENSION] , c2[DIMENSION];
-  // The blocks around the unit's voxel: offset, padded size, occupants and
-  // whether it is the voxel itself
-  struct Block { unsigned o , n , count; bool self; };
+  // The blocks around the unit's voxel: offset, occupants, whether it is
+  // the voxel itself and whether the simple kernel applies, plus the
+  // window of slots in range in x of the current particle (the blocks are
+  // sorted by x, and so are the unit's particles, so the window only moves
+  // forward)
+  struct Block { unsigned o , count , jlo , jhi; bool self , plain; };
   Block blocks[ 27 ];
   const prof_clock::time_point t0 = prof_clock::now();
   for ( long start; (start = args->nextVoxel->fetch_add( chunk )) < unitCount; )
@@ -116,8 +121,9 @@ void * calcInteractions ( void * arg_ )
       Block& bl = blocks[ blockCount++ ];
       bl.o = cells.offset[b2];
       bl.count = cells.count[b2];
-      bl.n = CellList::padded( bl.count );
+      bl.jlo = bl.jhi = 0;
       bl.self = ( b2 == unit.box );
+      bl.plain = pp.plain && ! cells.anchors[b2];
     }
     const unsigned o1 = cells.offset[ unit.box ];
     for ( unsigned i = unit.begin; i < unit.end; ++i ) {
@@ -130,12 +136,19 @@ void * calcInteractions ( void * arg_ )
       float f[DIMENSION];
       for ( unsigned int d=0; d<DIMENSION; ++d ) { f[d] = 0; }
       for ( unsigned bb=0; bb<blockCount; ++bb ) {
-	const Block& bl = blocks[bb];
+	Block& bl = blocks[bb];
+	const float * bx = cells.x[0].data() + bl.o;
+	while ( bl.jlo < bl.count && bx[bl.jlo] <= xi[0] - pp.eq ) { ++bl.jlo; }
+	while ( bl.jhi < bl.count && bx[bl.jhi] < xi[0] + pp.eq ) { ++bl.jhi; }
+	const unsigned jstart = bl.jlo / CellList::LANES * CellList::LANES;
+	const unsigned jend = CellList::padded( bl.jhi );
+	if ( jstart >= jend ) { continue; }
 	const long skip = bl.self ? (long) i : -1;
 	// Particles on top of each other give noise instead of a force,
 	// once per colliding partner
-	args->pairTests += bl.n;
-	unsigned collisions = repulsionFromBlock( cells , bl.o , bl.n , skip , xi , ri , pp , f );
+	args->pairTests += jend - jstart;
+	unsigned collisions = repulsionFromBlock( cells , bl.o , jstart , jend , skip ,
+						  xi , ri , pp , bl.plain , f );
 	while ( collisions-- ) { nih.noise( f ); }
       }
       Node& q = *cells.p[slot];

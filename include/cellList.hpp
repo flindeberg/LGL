@@ -55,6 +55,7 @@ struct CellList {
   // Per voxel of the box (row-major): start of its block and occupants
   std::vector< unsigned > offset;
   std::vector< unsigned > count;
+  std::vector< bool > anchors;  // whether the block holds an anchor
   std::vector< Unit > units;
   FixedVec_l lo;            // corner of the box, in voxel coordinates
   long extent[DIMENSION];
@@ -100,6 +101,7 @@ struct CellList {
     }
     offset.resize( boxSize + 1 );
     count.resize( boxSize );
+    anchors.assign( boxSize , false );
     units.clear();
     unsigned total = 0;
     long c[DIMENSION];
@@ -122,21 +124,31 @@ struct CellList {
   }
 
   // Parallel part: copy the particles of the box voxels [b0,b1) into
-  // their blocks. Disjoint ranges may be filled concurrently.
+  // their blocks, each block sorted by x so that the pair kernel can skip
+  // the part of a neighbouring block that is out of range in x. Disjoint
+  // ranges may be filled concurrently.
   void fill( const Grid_t& grid , long b0 , long b1 ) {
+    static thread_local std::vector< std::pair< float , Node* > > order;
     long c[DIMENSION];
     for ( long b=b0; b<b1; ++b ) {
       const unsigned n = count[b];
       if ( n == 0 ) { continue; }
       coords( b , c );
       const Voxel_t& v = grid[ gridIndex( grid , c ) ];
+      order.clear();
+      for ( Voxel_t::const_occupant_iterator it = v.begin(); it != v.end() && order.size() < n; ++it ) {
+	order.push_back( std::make_pair( (**it).X()[0] , *it ) );
+      }
+      std::sort( order.begin() , order.end() );
       const unsigned o = offset[b];
+      bool anchor = false;
       unsigned k = 0;
-      for ( Voxel_t::const_occupant_iterator it = v.begin(); it != v.end() && k < n; ++it, ++k ) {
-	Node& q = **it;
+      for ( ; k < order.size(); ++k ) {
+	Node& q = *order[k].second;
 	for ( unsigned int d=0; d<DIMENSION; ++d ) { x[d][o+k] = q.X()[d]; }
 	r[o+k] = q.radius();
 	af[o+k] = q.isAnchor() ? 2.f : 1.f;
+	anchor = anchor || q.isAnchor();
 	p[o+k] = &q;
       }
       for ( ; k < padded( n ); ++k ) {
@@ -145,6 +157,7 @@ struct CellList {
 	af[o+k] = 0;
 	p[o+k] = 0;
       }
+      anchors[b] = anchor;
     }
   }
 };
@@ -163,20 +176,25 @@ struct PairParams {
   float eq2;             // cutoff distance squared
   float k;               // spring constant
   float ef[DIMENSION];   // ellipse factors
+  bool plain;            // all radii equal and no ellipse factors: a block
+                         // without anchors can use the simpler kernel
 };
 
-// Adds to f the force on a particle at xi with radius ri from the block
-// [o, o+n) of the cell list (n padded), skipping slot `skip` (its own
-// slot, or -1). Returns how many particles in the block collide with it
-// (closer than the sum of the radii); those give no force, the caller
-// adds noise instead. The generic version works for any dimension; on
-// arm64 the 2D layout uses a NEON version, four pairs at a time.
-inline unsigned repulsionFromBlockScalar( const CellList& cl , unsigned o , unsigned n , long skip ,
+// Adds to f the force on a particle at xi with radius ri from the slots
+// [o+jstart, o+jend) of a block of the cell list (jstart and jend
+// multiples of LANES, jend at most the padded size), skipping slot `skip`
+// (its own slot, or -1). Returns how many particles in the range collide
+// with it (closer than the sum of the radii); those give no force, the
+// caller adds noise instead. The generic version works for any dimension;
+// on arm64 the 2D layout uses a NEON version, four pairs at a time. The
+// PLAIN variants assume equal radii, no ellipse factors and no anchors in
+// the block.
+inline unsigned repulsionFromBlockScalar( const CellList& cl , unsigned o , unsigned jstart , unsigned jend , long skip ,
 					  const float xi[DIMENSION] , float ri ,
 					  const PairParams& pp , float f[DIMENSION] )
 {
   unsigned collisions = 0;
-  for ( unsigned j=0; j<n; ++j ) {
+  for ( unsigned j=jstart; j<jend; ++j ) {
     if ( (long) j == skip ) { continue; }
     float dx[DIMENSION];
     float d2 = 0;
@@ -203,17 +221,19 @@ inline unsigned repulsionFromBlockScalar( const CellList& cl , unsigned o , unsi
 #ifdef CELLLIST_NEON
 
 // Only valid when DIMENSION == 2 (the other coordinates are ignored)
-inline unsigned repulsionFromBlockNeon2D( const CellList& cl , unsigned o , unsigned n , long skip ,
+template < bool PLAIN >
+inline unsigned repulsionFromBlockNeon2D( const CellList& cl , unsigned o , unsigned jstart , unsigned jend , long skip ,
 					  const float xi[DIMENSION] , float ri ,
 					  const PairParams& pp , float f[DIMENSION] )
 {
   const float32x4_t vxi = vdupq_n_f32( xi[0] ), vyi = vdupq_n_f32( xi[1] );
   const float32x4_t vri = vdupq_n_f32( ri );
+  const float32x4_t vrr2 = vdupq_n_f32( ( ri + ri ) * ( ri + ri ) );
   const float32x4_t veq2 = vdupq_n_f32( pp.eq2 ), veq = vdupq_n_f32( pp.eq );
   const float32x4_t vmk = vdupq_n_f32( -pp.k );
   const float32x4_t vex = vdupq_n_f32( pp.ef[0] ), vey = vdupq_n_f32( pp.ef[1] );
   const float32x4_t vzero = vdupq_n_f32( 0 );
-  const uint32_t idx0[4] = { 0 , 1 , 2 , 3 };
+  const uint32_t idx0[4] = { jstart , jstart + 1 , jstart + 2 , jstart + 3 };
   uint32x4_t vidx = vld1q_u32( idx0 );
   const uint32x4_t vskip = vdupq_n_u32( skip < 0 ? 0xffffffffu : (uint32_t) skip );
   const uint32x4_t vfour = vdupq_n_u32( 4 );
@@ -223,19 +243,27 @@ inline unsigned repulsionFromBlockNeon2D( const CellList& cl , unsigned o , unsi
   const float * ys = cl.x[1].data() + o;
   const float * rs = cl.r.data() + o;
   const float * as = cl.af.data() + o;
-  for ( unsigned j=0; j<n; j+=4 ) {
+  for ( unsigned j=jstart; j<jend; j+=4 ) {
     const float32x4_t dx = vsubq_f32( vxi , vld1q_f32( xs + j ) );
     const float32x4_t dy = vsubq_f32( vyi , vld1q_f32( ys + j ) );
     const float32x4_t d2 = vmlaq_f32( vmulq_f32( dx , dx ) , dy , dy );
-    const float32x4_t rr = vaddq_f32( vri , vld1q_f32( rs + j ) );
     uint32x4_t in = vcltq_f32( d2 , veq2 );
     in = vbicq_u32( in , vceqq_u32( vidx , vskip ) );
-    const uint32x4_t col = vandq_u32( vcleq_f32( d2 , vmulq_f32( rr , rr ) ) , in );
+    uint32x4_t col;
+    float32x4_t dsx , dsy;
+    if ( PLAIN ) {
+      col = vandq_u32( vcleq_f32( d2 , vrr2 ) , in );
+      dsx = dx; dsy = dy;
+    } else {
+      const float32x4_t rr = vaddq_f32( vri , vld1q_f32( rs + j ) );
+      col = vandq_u32( vcleq_f32( d2 , vmulq_f32( rr , rr ) ) , in );
+      dsx = vmulq_f32( dx , vex ); dsy = vmulq_f32( dy , vey );
+    }
     vcol = vsubq_u32( vcol , col );
-    const float32x4_t dsx = vmulq_f32( dx , vex ), dsy = vmulq_f32( dy , vey );
-    const float32x4_t mag = vsqrtq_f32( vmlaq_f32( vmulq_f32( dsx , dsx ) , dsy , dsy ) );
+    const float32x4_t m2 = PLAIN ? d2 : vmlaq_f32( vmulq_f32( dsx , dsx ) , dsy , dsy );
+    const float32x4_t mag = vsqrtq_f32( m2 );
     float32x4_t sc = vdivq_f32( vmulq_f32( vmk , vsubq_f32( mag , veq ) ) , mag );
-    sc = vmulq_f32( sc , vld1q_f32( as + j ) );
+    if ( ! PLAIN ) { sc = vmulq_f32( sc , vld1q_f32( as + j ) ); }
     // Lanes out of range, colliding or the particle itself get 0 (a bit
     // select, so a NaN from 0/0 in those lanes is dropped)
     sc = vbslq_f32( vbicq_u32( in , col ) , sc , vzero );
@@ -250,18 +278,19 @@ inline unsigned repulsionFromBlockNeon2D( const CellList& cl , unsigned o , unsi
 
 #endif
 
-inline unsigned repulsionFromBlock( const CellList& cl , unsigned o , unsigned n , long skip ,
+inline unsigned repulsionFromBlock( const CellList& cl , unsigned o , unsigned jstart , unsigned jend , long skip ,
 				    const float xi[DIMENSION] , float ri ,
-				    const PairParams& pp , float f[DIMENSION] )
+				    const PairParams& pp , bool plainBlock , float f[DIMENSION] )
 {
 #ifdef CELLLIST_NEON
   if ( DIMENSION == 2 ) {
-    return repulsionFromBlockNeon2D( cl , o , n , skip , xi , ri , pp , f );
+    return plainBlock
+      ? repulsionFromBlockNeon2D< true >( cl , o , jstart , jend , skip , xi , ri , pp , f )
+      : repulsionFromBlockNeon2D< false >( cl , o , jstart , jend , skip , xi , ri , pp , f );
   }
 #endif
-  return repulsionFromBlockScalar( cl , o , n , skip , xi , ri , pp , f );
+  return repulsionFromBlockScalar( cl , o , jstart , jend , skip , xi , ri , pp , f );
 }
-
 
 //---------------------------------------------------------------
 

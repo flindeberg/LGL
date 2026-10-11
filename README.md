@@ -158,9 +158,12 @@ on current toolchains (macOS on Apple Silicon and current Ubuntu) and to make a 
   lists instead of boost's edge set, and the integration takes no locks. Together with the
   earlier steps (relaxed atomics, vector voxel occupants, dynamic load balancing) the 2000
   and 2001 layouts take 14 and 17 s with 10 threads, against 51 and 59 s before the cell
-  list and about a minute at the start of the revival. Quality metrics (median and p90 edge
-  length, share of overlapping nodes) stay within the run-to-run spread on 2000 and 2001
-  and the images look alike; 2025 has not been re-measured with the cell list. The
+  list and about a minute at the start of the revival; 2025 (1.56M nodes, 44 levels) takes
+  12 min against 46 min before the cell list and 63 min at the start. Quality metrics
+  (median and p90 edge length, share of overlapping nodes) stay within the run-to-run
+  spread on 2000 and 2001 and the images look alike. For 2025 the p90 edge length is
+  2-4% above the old code's (as it already was after the per-voxel-pair force sums) while
+  the median and the overlap shares match it. The
   collision noise now comes from a per-thread generator, two colliding anchors no longer
   get noise, and the cutoff test is done in float (the force is zero at the cutoff, so a
   pair on the boundary contributes nothing either way). `doc/optimization.md` has the

@@ -11,7 +11,7 @@ before the layout optimizations below. Per year:
 
 | Step | Share | Notes |
 |---|---|---|
-| `lglayout2D` (force simulation) | **94-96%** | 2025: 1.56M nodes, **44 levels**, 60 min at 10 threads with the old code |
+| `lglayout2D` (force simulation) | **94-96%** | 2025: 1.56M nodes, **44 levels**, 63 min at 10 threads with the old code, 12 min with the cell list |
 | download + parse (`bviewpairs`) | 2-12 min | overlapped with the previous year's layout, so ~free |
 | ImageMaker (3 PNGs at 2400x2400) | ~35 s | |
 | `lglbreakup`, Perl conversion, `lglrebuild`, colour file | ~30 s | |
@@ -30,10 +30,19 @@ revival):
 | integrate | 0.8 s | 5% |
 | stats, placement, other | 0.25 s | 2% |
 
-The pair kernel runs at 0.6-0.7 ns per pair test (NEON, four pairs at a time).
+The pair kernel runs at 0.6-0.9 ns per pair test (NEON, four pairs at a time).
 Visiting every pair from both sides costs 2.3x the pair tests of the old half
 shell (12.9G vs 5.6G on a 25k-node test graph), which is still 3.5x faster than
 the old scalar kernel at ~6 ns per test.
+
+2025 (1.56M nodes, 44 levels, ~6000 iterations) with 10 threads: 705 s wall,
+of which repulsion 561 s at 99.4% thread utilisation, pack 50 s (half of it the
+sort by x), edges 43 s, integrate 33 s. It does 7.1 trillion pair tests (10.1
+without the x window), i.e. ~750 per particle and iteration against ~175 on
+the 2000 graph: the big hubs keep thousands of leaves in a few voxels for the
+whole level, so 2025 is bound by the pair kernel alone and the small phases do
+not matter there. On 2000 the x window is neutral (28% fewer lanes, but the
+per-call setup weighs more with ~12 particles per voxel); on 2025 it gave -32%.
 
 ## Already done (don't redo)
 
@@ -50,7 +59,12 @@ the old scalar kernel at ~6 ns per test.
   summed by one thread and stored once (no atomics, no locks). Collisions are
   counted per lane and turned into noise from a per-thread generator
   (`ParticleInteractionHandler::noise`). Hubs with thousands of leaves in one
-  voxel are split across threads by the units.
+  voxel are split across threads by the units. Each block is sorted by x when
+  packed, and for each particle only the window of a neighbouring block within
+  the cutoff in x is visited (the window only moves forward, since the
+  particles of the unit are sorted too). Blocks without anchors use a kernel
+  without the radius, anchor-factor and ellipse loads when all radii are equal
+  and there are no ellipse factors (`PairParams::plain`).
 - Flat edge lists (`EdgeList` in `include/calcFuncs.h`, built per level by
   `buildEdgeLists`): the edge and stats phases take contiguous blocks instead of
   `std::advance` through boost's edge set per thread; the stats phase only sees
@@ -84,13 +98,15 @@ thread assignment or the random stream changes (layouts are stochastic anyway);
    prints (nodes, iterations, seconds) show this directly. Options: scale the cap
    by the number of new nodes, merge small tail levels, sum dx in double with a
    looser tolerance.
-2. **Fewer pair tests (equivalent).** The full shell tests each pair twice. A half
-   shell with per-thread force accumulators (not atomics) or, cheaper, sorting the
-   particles of a block by x and stopping the j loop once x_j - x_i exceeds the
-   cutoff, would cut the 12.9G tests roughly in half. The kernel itself computes
-   the sqrt and division for every lane; most lanes are out of range (the cutoff
-   is the voxel width, the equilibrium half of that), so a cheaper mask-first
-   pass could help too.
+2. **Fewer pair tests (equivalent).** The full shell still tests each pair twice
+   (the x window removes the out-of-range part of the left and right columns
+   only). A half shell would need per-thread force accumulators for the partner
+   block or atomics again. Inside a dense hub every pair is within the cutoff, so
+   there the n^2 is the physics. Measured and rejected: 1/sqrt via
+   `vrsqrteq_f32` + 2 Newton steps instead of sqrt + div (no gain, the kernel is
+   not division-bound), a mask-first pass (with 35% of lanes in range almost
+   every group of 4 has one). Untested: two independent accumulator chains (8
+   lanes per step), a y window as well by splitting blocks into y strips.
 3. **Edge phase (equivalent, ~12%).** `onlyEdgeInteractions` does two atomic
    fetch_adds per edge (a CAS loop each on `boost::atomic<float>`). A per-vertex
    adjacency (CSR built with the edge list) would let each thread sum its own

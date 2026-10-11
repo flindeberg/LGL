@@ -66,6 +66,7 @@ struct ThreadArgs
   // The particles of the active box, packed for the repulsion phase
   // (shared by all threads, rebuilt every iteration)
   CellList * cells;
+  bool uniformRadius; // all particles have the same radius
   // Voxels that can hold particles lie inside the box activeMin..activeMax
   // (shared by all threads). It is the union of staticMin..staticMax, the
   // particles placed before the simulation (root, anchors, -x), and the
