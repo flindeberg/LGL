@@ -106,7 +106,13 @@ class Particle {
   void radius( prec_ r ){ radius_=r; }
   prec_ radius() const { return radius_; }
 
-  void add2F( const vec_type& f_ ) { f += f_; }
+  // Forces are only summed up while the interaction threads run and read
+  // after they are joined, so relaxed ordering is enough (no full barrier
+  // per component, which is what made this the hottest spot).
+  void add2F( const vec_type& f_ ) {
+    for ( unsigned int ii=0; ii<dimension; ++ii )
+      f[ii].fetch_add( f_[ii], boost::memory_order_relaxed );
+  }
 
   void X( const vec_type& x_ ) { x=x_; }
 

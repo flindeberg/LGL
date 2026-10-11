@@ -22,7 +22,8 @@
 #define _VOXEL_HPP_
 
 #include <iostream>
-#include <unordered_set>
+#include <vector>
+#include <algorithm>
 #include "cube.hpp"
 #include "aPthread.hpp"
 
@@ -38,7 +39,9 @@ class Voxel : public Cube< typename Occupant::precision ,
 {
 
  private:
-  typedef typename std::unordered_set< Occupant * > OL_;
+  // A plain vector: voxels hold few particles and are scanned every
+  // iteration, so contiguous storage beats hashing (no node chasing).
+  typedef typename std::vector< Occupant * > OL_;
   typedef Voxel< Occupant > Voxel_;
   typedef Cube< typename Occupant::precision , 
 		Occupant::dimension > Cube_;
@@ -82,8 +85,12 @@ class Voxel : public Cube< typename Occupant::precision ,
 
   void index( unsigned int i ) { index_=i; }
 
-  void insert( Occupant& o ) { occupants.insert(&o); }
-  void remove( Occupant& o ) { occupants.erase(&o); }
+  void insert( Occupant& o ) { occupants.push_back(&o); }
+  void remove( Occupant& o ) {
+    // Order does not matter, so swap with the last one and drop it.
+    typename OL_::iterator i = std::find( occupants.begin(), occupants.end(), &o );
+    if ( i != occupants.end() ) { *i = occupants.back(); occupants.pop_back(); }
+  }
 
   void incInteractionCtr( long i=1 ) { interactionCtr_+=i; }
   void interactionCtr( long i ) { interactionCtr_=i; }
