@@ -9,6 +9,8 @@ tagsfile
 /bin/lglbreakup
 /bin/lglfileconvert
 /bin/lglrebuild
+/bin/bviewpairs
+tools/bviewpairs/target/
 /testrun/the_internet/setup.cfg
 /testrun/the_internet/tmp
 /testrun/the_internet/*.tmp

@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 
 import sys
-import shlex
 
 # python version of get_neigh
 
 for line in sys.stdin:
-    line = shlex.split(line)
+    line = line.split()
     #line = line.split(' ')
     res = []
     for i in range(len(line) - 1):

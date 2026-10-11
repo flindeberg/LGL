@@ -21,44 +21,57 @@ export ncol=${folder}.full.ncol
 ## Quicker sort
 export LC_ALL=C
 
-## Rough outline aspath info
-## zcat -- reads multiple files (bgpdump only takes one)
-## bgpdump -- format into table format
-## cut -d '|' -f 7 -- takes the relevant info out (i.e. ASpath)
-## sed -e ... -- get rid of commas and stuff
-## get_neighbors -- see above, get all pairs of neighbors in order
-## sort -- sorts pairs
-## uniq -c -- counts unique occcurences
-## awk and awk -- reformat into the format we want
-## sort -n -- a last numerical sort after reformatting
+## Each dump is parsed on its own, several in parallel (one per collector
+## for a creategraphfromdate.sh run), and the per-dump counts are summed.
+## Counts add up, so the result is the same as parsing all dumps as one
+## stream, just faster.
+##
+## Per dump, bviewpairs (tools/bviewpairs, built by make) reads the MRT
+## data and counts, in one pass:
+##   AS -> AS: pairs of neighbouring ASes on each AS path
+##   AS -> prefix: each prefix paired with its origin AS(es)
+## This replaces bgpdump | cut | sed | get_neigh.py / get_pairs.py | awk,
+## with the same output (IPv6 prefixes are written in RFC 5952 form).
+##
+## Then, for both: awk sums the per-dump counts and sort -n does a last
+## numerical sort.
+
+## make install puts bviewpairs in bin/, two levels up from the run directory
+bviewpairs=${bviewpairs:-$(cd "$(dirname "$0")/../.." && pwd)/bin/bviewpairs}
+if [ ! -x "$bviewpairs" ]; then
+	echo "Error: $bviewpairs not found, run 'make install' first" >&2
+	exit 1
+fi
+
+parse_one(){
+	$zcat "$1" | "$bviewpairs" "$2.as_as" "$2.prefix_as"
+}
+export -f parse_one
+export zcat bviewpairs
+
+## One dump per core (gzcat and bviewpairs per dump, bviewpairs does the work)
+jobs=${PARSE_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu)}
+
+parts=${folder}.parse_parts
+rm -rf $parts && mkdir $parts
 
 echo "in $(pwd)"
-echo "zcat $@"
+echo "Parsing $# dump(s) with $jobs in parallel for ASpath-info (i.e. AS -> AS routing) and prefix-info (i.e. AS -> prefix routing)"
 
-echo "Parsing $@ for ASpath-info (i.e. AS -> AS routing)"
+i=0
+time (for dump in "$@"; do
+	i=$((i+1))
+	printf '%s\0%s\0' "$dump" "$parts/$i"
+done | xargs -0 -n 2 -P $jobs "$BASH" -c 'parse_one "$1" "$2"' _) ||\
+	{ echo "Error: parsing failed, see above" >&2; rm -rf $parts; exit 1; }
 
-time ($zcat $@ | bgpdump -m - | cut -d '|' -f 7 |\
-	  sed -e 's/[{},]/ /g' | ./get_neigh.py | sort -S1G --parallel=24 | uniq -c |\
-	  awk '{$1=$1};1' | awk '{print $2 " " $3 " " $1}' | sort -n -S1G --parallel=24 > $asas)
-	  
-## rough ooutline mapping prefixes
-## zcat -- reads multiple files (bgpdump only takes one)
-## bgpdump -- format into table format
-## cut -d '|' -f 6-7 -- takes the relevant info out (i.e. ASpath and prefix)
-## sed -e ... -- get rid of commas and stuff
-## awk and awk -- formatting
-## get_pairs -- see above, get all pairs of neighbors in order
-## sort -- sorts pairs
-## uniq -c -- counts unique occcurences
-## awk and awk -- reformat into the format we want
-## sort -n -- a last numerical sort after reformatting
+echo "Summing per-dump counts into $asas and $preas"
+time (cat $parts/*.as_as |\
+	  awk '{c[$1 " " $2] += $3} END {for (k in c) print k " " c[k]}' | sort -n -S1G --parallel=24 > $asas
+	cat $parts/*.prefix_as |\
+	  awk '{c[$1 " " $2] += $3} END {for (k in c) print k " " c[k]}' | sort -n -S1G --parallel=24 > $preas)
+rm -rf $parts
 
-echo "Parsing $@ for prefix-info (i.e. AS -> prefix routing)"
-time ($zcat $@ | bgpdump -m - | cut -d '|' -f 6-7 |\
-	  sed "s/|/ /" | awk -F' ' '{print $1 " " $NF}' | awk '{$1=$1};1' |\
-	  sed -e 's/[{},]/ /g' | ./get_pairs.py | sort -S1G --parallel=24 | uniq -c |\
-	  awk '{print $2 " " $3 " " $1}' | sort -n -S1G --parallel=24 > $preas)
-      
 echo "Combining $asas and $preas into $ncol"
 time (cat $asas $preas > $ncol)
 

@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 
 import sys
-import shlex
 
 # python version of get_pairs
 
 for line in sys.stdin:
-    line = shlex.split(line)
+    line = line.split()
     #line = line.split(' ')
     prefix = line[0]
     res = []

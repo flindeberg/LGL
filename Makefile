@@ -14,9 +14,15 @@ CBINS:
 	# Writing log to install_perl.log
 	./setup.pl -i &> install_perl.log
 
-all: JARS
+# BGP dump parser (Rust), used by scripts/parsebview.sh
+BVIEWPAIRS:
+	cargo build --release --locked --manifest-path tools/bviewpairs/Cargo.toml
+	mkdir -p bin
+	cp tools/bviewpairs/target/release/bviewpairs bin/
+
+all: JARS BVIEWPAIRS
 	make -C src all
 
 install: all CBINS
 
-.PHONY: all install JARS CLASS CBINS
+.PHONY: all install JARS CLASS CBINS BVIEWPAIRS
