@@ -150,8 +150,12 @@ on current toolchains (macOS on Apple Silicon and current Ubuntu) and to make a 
   prefixes are now written in RFC 5952 form (bgpdump wrote a single zero group as `::`,
   e.g. `2001:668::3:ffff:1:0:2270` instead of `2001:668:0:3:ffff:1:0:2270`).
 - Layout: relaxed atomic force sums, vectors instead of hash sets for voxel occupants,
-  and dynamic load balancing between threads. Measured separately on the 2001 graph with
-  10 threads: about 13% and 17% less wall time, so roughly 25-30% together.
+  and dynamic load balancing between threads (measured separately on the 2001 graph with
+  10 threads: about 13% and 17% less wall time). On top of that, forces are summed per
+  voxel pair before the atomic add, and only the voxels around the layout are visited
+  instead of the whole (much larger) grid: another 18-27% less wall time (2000, 2001,
+  2025). For 2025 the longest edges came out 2-4% longer over two runs each, within what
+  a re-run of the layout can vary; the images look alike.
 - `creategraphfromdate.sh` uses every RIS collector that exists (rrc25 and newer were
   previously left out) instead of a fixed rrc00-rrc24.
 
