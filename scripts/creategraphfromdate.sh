@@ -44,10 +44,20 @@ get_bview_url(){
     fi
 }
 
+## All RIS collectors (rrcNN) that exist. There are gaps (no rrc17) and new
+## ones get added, so probe upwards and stop after 10 missing in a row.
 get_rrcs(){
-    for i in {00..24}
+    misses=0
+    for i in {00..99}
     do
-	    echo "$i"
+        if curl -L --head --silent --fail "http://data.ris.ripe.net/rrc${i}/" > /dev/null;
+        then
+            misses=0
+            echo "$i"
+        else
+            misses=$((misses+1))
+            [ $misses -ge 10 ] && break
+        fi
     done
 }
 
