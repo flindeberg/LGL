@@ -40,13 +40,29 @@ void * calcInteractions ( void * arg_ )
   args->nodeHandler->springConstant( args->casualSpringConstant );
   //const Graph_t& layout_graph = *(args->layout_graph);
   //layout_graph.print();
-  // Take chunks of voxels until all are done. Voxels differ a lot in how
-  // many particles they hold, so fixed per-thread lists left threads idle.
+  // Only voxels inside the active box can hold particles; the grid itself
+  // is hundreds of times larger than the layout. Walk the box row by row
+  // and take chunks of voxels until all are done. Voxels differ a lot in
+  // how many particles they hold, so the work is balanced dynamically.
   // Forces are atomic, so any thread can handle any voxel.
-  const long chunk = 256;
-  for ( long start; (start = args->nextVoxel->fetch_add( chunk )) < args->allVoxelsSize; )
-  for ( long ii=start; ii<start+chunk && ii<args->allVoxelsSize; ++ii ) {
-    grid_i.current( args->allVoxels[ii] );
+  const FixedVec_l& lo = *(args->activeMin);
+  const FixedVec_l& hi = *(args->activeMax);
+  long extent[DIMENSION];
+  long boxSize = 1;
+  for ( unsigned int d=0; d<DIMENSION; ++d ) {
+    extent[d] = hi[d] - lo[d] + 1;
+    boxSize *= extent[d] > 0 ? extent[d] : 0;
+  }
+  const long chunk = 16;
+  FixedVec_l voxel;
+  for ( long start; (start = args->nextVoxel->fetch_add( chunk )) < boxSize; )
+  for ( long ii=start; ii<start+chunk && ii<boxSize; ++ii ) {
+    long rest = ii;
+    for ( unsigned int d=0; d<DIMENSION; ++d ) {
+      voxel[d] = lo[d] + rest % extent[d];
+      rest /= extent[d];
+    }
+    grid_i.current( voxel );
     Voxel_t& vox1 = grid_i.currentVox();
     if ( ! vox1.empty() ) {
       // Iterate through the neighbors of each voxel
@@ -78,6 +94,7 @@ void * integrateParticles ( void * arg_ )
   const LevelMap& levels = *(args.levels);
   unsigned int currentLevel = args.currentLevel;
   Vi v, vend;
+  emptyBox( args.boxMin , args.boxMax );
   int vertexCount = num_vertices( layout_graph.boostGraph() );
   tie( v , vend ) = vertices( layout_graph.boostGraph() );
   if ( whichThread != 0 ) { std::advance( v , whichThread ); }
@@ -93,6 +110,10 @@ void * integrateParticles ( void * arg_ )
     if ( grid.checkInclusion( n.X() ) ) { shift_particle( n , grid ); }
     else {
       // Particle is outside the grid.
+    }
+    // Whether it moved or not, it is in this voxel now
+    if ( n.container() >= 0 ) {
+      addVoxelToBox( grid , n.container() , args.boxMin , args.boxMax );
     }
     // Reset the forces to zero for next 
     // iteration
@@ -243,6 +264,14 @@ void beginSimulation( ThreadContainer& threads ,
 			    static_cast<void *>(&threadArgs[ii]) ) ); 
       }
 		wait_for_futures();
+
+      // The voxels that can hold particles in the next iteration
+      *(threadArgs[0].activeMin) = *(threadArgs[0].staticMin);
+      *(threadArgs[0].activeMax) = *(threadArgs[0].staticMax);
+      for ( long ii=0; ii<threadCount; ++ii ) {
+	growBox( threadArgs[ii].boxMin , threadArgs[ii].boxMax ,
+		 *(threadArgs[0].activeMin) , *(threadArgs[0].activeMax) );
+      }
       
       // Collect stats for progress
       for ( long ii=0; ii<threadCount; ++ii ) {

@@ -5,6 +5,7 @@
 #define CALCFUNCS_H_
 
 #include <atomic>
+#include <climits>
 #include "configs.h"
 #include "fixedVecOperations.hpp"
 #include "sphere.hpp"
@@ -27,6 +28,31 @@ typedef adjacency_list< vecS, vecS, directedS > out_graph;
 
 //------------------------------------------------
 
+// An empty box (min > max), and growing a box by the voxel with the given
+// grid index (index = x + y*nx + z*nx*ny)
+inline void emptyBox( FixedVec_l& lo , FixedVec_l& hi ) {
+  for ( unsigned int d=0; d<DIMENSION; ++d ) { lo[d] = LONG_MAX; hi[d] = -1; }
+}
+
+inline void addVoxelToBox( const Grid_t& grid , long index ,
+			   FixedVec_l& lo , FixedVec_l& hi ) {
+  for ( unsigned int d=0; d<DIMENSION; ++d ) {
+    const long n = grid.voxelsPerEdge( d );
+    const long c = index % n;
+    index /= n;
+    if ( c < lo[d] ) { lo[d] = c; }
+    if ( c > hi[d] ) { hi[d] = c; }
+  }
+}
+
+inline void growBox( const FixedVec_l& lo2 , const FixedVec_l& hi2 ,
+		     FixedVec_l& lo , FixedVec_l& hi ) {
+  for ( unsigned int d=0; d<DIMENSION; ++d ) {
+    if ( lo2[d] < lo[d] ) { lo[d] = lo2[d]; }
+    if ( hi2[d] > hi[d] ) { hi[d] = hi2[d]; }
+  }
+}
+
 struct ThreadArgs
 {
   NodeContainer * nodes;
@@ -35,10 +61,15 @@ struct ThreadArgs
   FixedVec_l * voxelList;
   ParticleStats_t * stats;
   long voxelListSize;
-  // All voxels, shared by the threads, which take chunks of them through
-  // nextVoxel so that the work is balanced dynamically
-  FixedVec_l * allVoxels;
-  long allVoxelsSize;
+  // Voxels that can hold particles lie inside the box activeMin..activeMax
+  // (shared by all threads). It is the union of staticMin..staticMax, the
+  // particles placed before the simulation (root, anchors, -x), and the
+  // per-thread boxMin..boxMax of the particles each thread integrated.
+  // Threads take chunks of the box through nextVoxel, so the work is
+  // balanced dynamically.
+  FixedVec_l boxMin, boxMax;
+  FixedVec_l * activeMin, * activeMax;
+  FixedVec_l * staticMin, * staticMax;
   std::atomic<long> * nextVoxel;
   Grid_t * grid;
   prec_t eqDistance;

@@ -277,8 +277,7 @@ try
   threads.defaultThread.scope(PTHREAD_SCOPE_SYSTEM);
   threads.applyAttributes();
   ThreadArgs * threadArgs = new ThreadArgs[threadCount];
-  FixedVec_l * allVoxels = new FixedVec_l[grid.size()];
-  long allVoxelsSize = 0;
+  FixedVec_l activeMin, activeMax, staticMin, staticMax;
   std::atomic<long> nextVoxel( 0 );
   for( long threadCtr=0; threadCtr<threadCount; ++threadCtr )
     {
@@ -292,12 +291,10 @@ try
       current.voxelList = new FixedVec_l[grid.size()/threadCount+1];
       current.voxelListSize = 
 	schedual.getVoxelList( threadCtr , current.voxelList );
-      // getVoxelList hands out every threadCount-th voxel; put them back
-      // in the scheduler's order in one list shared by all threads
-      for ( long jj=0; jj<current.voxelListSize; ++jj )
-	allVoxels[ threadCtr + jj*threadCount ] = current.voxelList[jj];
-      allVoxelsSize += current.voxelListSize;
-      current.allVoxels = allVoxels;
+      current.activeMin = &activeMin;
+      current.activeMax = &activeMax;
+      current.staticMin = &staticMin;
+      current.staticMax = &staticMax;
       current.nextVoxel = &nextVoxel;
       current.whichThread = threadCtr;
       current.gridIterator = new GridIterator(grid);
@@ -320,8 +317,6 @@ try
       current.levels = &levels;
       current.parents = &parents;
     }
-  for( long threadCtr=0; threadCtr<threadCount; ++threadCtr )
-    threadArgs[threadCtr].allVoxelsSize = allVoxelsSize;
   cout << "Done." << endl;
 
   bool givenCoords = false;
@@ -331,6 +326,17 @@ try
       shift_particle( nodes[ii] , grid );
     }
   }
+
+  // Particles already in the grid (root, anchors, given coords) stay part
+  // of the voxels to visit; the simulation adds what it integrates
+  emptyBox( staticMin , staticMax );
+  for ( NodeContainer::size_type ii=0; ii<nodes.size(); ++ii ) {
+    if ( nodes[ii].container() >= 0 ) {
+      addVoxelToBox( grid , nodes[ii].container() , staticMin , staticMax );
+    }
+  }
+  activeMin = staticMin;
+  activeMax = staticMax;
 
   //boost::timer simulation_time_begin;
 
