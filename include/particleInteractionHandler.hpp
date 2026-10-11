@@ -181,7 +181,31 @@ public:
     }
   }
 
+  // As interaction(), but the spring forces are added to acc1/acc2 (for p1
+  // and p2) instead of to the particles, so a caller can sum many pairs
+  // locally and add each particle's total once.
+  void interaction( Particle& p1 , Particle& p2 ,
+		    vec_type& acc1 , vec_type& acc2 ) const {
+    if ( euclideanDistanceSquared( p1.X().begin(), p1.X().end(), p2.X().begin() ) <
+	 eqDistanceSquared_ ) {
+      springRepulsiveInteraction( p1 , p2 , acc1 , acc2 );
+    }
+  }
+
   void springRepulsiveInteraction( Particle& p1 , Particle& p2 ) const {
+    vec_type f1( 0 ) , f2( 0 );
+    if ( springRepulsiveInteraction( p1 , p2 , f1 , f2 ) ) {
+      // no need to lock because particle's force constituents are atomic
+      if ( !p1.isAnchor() ) { p1.add2F( f1 ); }
+      if ( !p2.isAnchor() ) { p2.add2F( f2 ); }
+    }
+  }
+
+  // Adds the spring force on p1 to acc1 and on p2 to acc2 (nothing for an
+  // anchor). Colliding particles get noise added to them directly instead,
+  // and then false is returned.
+  bool springRepulsiveInteraction( Particle& p1 , Particle& p2 ,
+				   vec_type& acc1 , vec_type& acc2 ) const {
     
     const bool p1anchor = p1.isAnchor(), p2anchor = p2.isAnchor();
     if ( p1.collisionCheck(p2) ) {
@@ -189,7 +213,7 @@ public:
           addNoise(p1);
        if ( !p2anchor || p1anchor )
           addNoise(p2);
-       return;
+       return false;
     }
 
     vec_type x1 = p1.X();
@@ -205,47 +229,19 @@ public:
     const precision sepFromIdeal = ( magx1x2 - eqDistance_ );
     const precision scale = -springConstant_ * sepFromIdeal / magx1x2;
 
-    vec_type f_;
-    vec_type fm1_;
+    // An anchored partner pushes twice as hard
+    const precision scale1 = p2anchor ? 2 * scale : scale;
+    const precision scale2 = p1anchor ? 2 * scale : scale;
 
     for ( unsigned int ii=0; ii<dimension; ++ii ){
       precision dx = ( x1[ii] - x2[ii] );
 #if 0	// results in a bad image for "the internet"
       if ( dx > eqDistance_ ) dx = 1.0 / dx;
 #endif
-      precision f = dx * scale;
-      f_[ii] = f;
-      fm1_[ii] = -f;
+      if ( !p1anchor ) { acc1[ii] += dx * scale1; }
+      if ( !p2anchor ) { acc2[ii] -= dx * scale2; }
     }
-
-//     cout << "d: " << magx1x2 << "\tsep: " << sepFromIdeal << "\tSc: " 
-// 	 << scale << "\tEQ: " << eqDistance_ << endl;
-//     cout << "B4" << endl; 
-//     p1.print(); 
-//     p2.print(); 
-
-    if ( !p1anchor ) {
-       if ( p2anchor )
-          f_.scale( 2 );
-       // no need to lock because particle's force constituents are atomic
-       //p1.lock();
-       p1.add2F(f_);
-       //p1.unlock();
-    }
-
-    if ( !p2anchor ) {
-       if ( p1anchor )
-          fm1_.scale( 2 );
-       // no need to lock because particle's force constituents are atomic
-       //p2.lock();
-       p2.add2F(fm1_);
-       //p2.unlock();
-    }
-
-//    cout << "AFTER" << endl; 
-//    p1.print(); 
-//    p2.print(); 
-
+    return true;
   }
 
   void integrate( Particle& p1 ) const {    

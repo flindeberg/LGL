@@ -23,6 +23,7 @@
 
 //--------------------------------------------- 
 
+#include <vector>
 #include <iostream>
 #include "voxel.hpp"
 
@@ -42,6 +43,7 @@ class VoxelInteractionHandler {
   typedef typename voxel_type::occupant_iterator occupant_iterator;
   typedef typename voxel_type::const_occupant_iterator const_occupant_iterator;
   typedef InteractionHandler interaction_handler_type;
+  typedef typename InteractionHandler::vec_type force_type;
 
  protected:  
   voxel_type * current;
@@ -52,6 +54,19 @@ class VoxelInteractionHandler {
 
   void initVars() {
     current=0; nbhr=0; ih=0; id_=0;
+  }
+
+  // Per-thread buffer of n zeroed force accumulators
+  static std::vector< force_type >& scratch( size_type n ) {
+    static thread_local std::vector< force_type > buffer;
+    buffer.assign( n , force_type( 0 ) );
+    return buffer;
+  }
+
+  static void addForce( occupant_type& p , const force_type& f ) {
+    for ( unsigned int d=0; d<occupant_type::dimension; ++d ) {
+      if ( f[d] != 0 ) { p.add2F( f ); return; }
+    }
   }
 
  public:
@@ -83,21 +98,27 @@ class VoxelInteractionHandler {
     VIH_::twoVoxelInteractions( *current , *nbhr );
   }
   
+  // The forces of each voxel pair are summed locally and added to each
+  // particle once, instead of one atomic add per interacting pair. Dense
+  // voxels hold tens of particles, so this saves most of the atomics.
   void twoVoxelInteractions( voxel_type& v1 , voxel_type& v2 ) const {
     // This doesn't do an occupancy check since that should
     // have been done already.
     if ( v1.index() == v2.index() ) {
       return VIH_::sameVoxelInteractions( v1 );
-    } else {
-      //cout << "DIFFERENT" << endl;
-      for ( occupant_iterator ii = v1.begin(); ii!=v1.end(); ++ii ) {
-	for ( occupant_iterator jj = v2.begin(); jj!=v2.end(); ++jj ) {
-	  //(*ii)->print();
-	  //(*jj)->print(); 
-	  ih->interaction( *(*ii) , *(*jj) );
-	}
+    }
+    std::vector< force_type >& acc2 = VIH_::scratch( v2.occupancy() );
+    for ( occupant_iterator ii = v1.begin(); ii!=v1.end(); ++ii ) {
+      force_type acc1( 0 );
+      size_type kk = 0;
+      for ( occupant_iterator jj = v2.begin(); jj!=v2.end(); ++jj, ++kk ) {
+	ih->interaction( *(*ii) , *(*jj) , acc1 , acc2[kk] );
       }
-      //cout << "DONE" << endl;
+      VIH_::addForce( *(*ii) , acc1 );
+    }
+    size_type kk = 0;
+    for ( occupant_iterator jj = v2.begin(); jj!=v2.end(); ++jj, ++kk ) {
+      VIH_::addForce( *(*jj) , acc2[kk] );
     }
   }
 
@@ -107,13 +128,18 @@ class VoxelInteractionHandler {
 
   void sameVoxelInteractions( voxel_type& v1 ) const {
     if ( v1.occupancy() < 2 ) { return; }
-    for ( occupant_iterator ii = v1.begin(); ii!=v1.end(); ++ii ) {
+    std::vector< force_type >& acc = VIH_::scratch( v1.occupancy() );
+    size_type ki = 0;
+    for ( occupant_iterator ii = v1.begin(); ii!=v1.end(); ++ii, ++ki ) {
       occupant_iterator current = ii;
-      for ( occupant_iterator jj = ++current; jj!=v1.end(); ++jj ) {
-	//(*ii)->print();
-	//(*jj)->print();
-	ih->interaction( *(*ii) , *(*jj) );
+      size_type kj = ki + 1;
+      for ( occupant_iterator jj = ++current; jj!=v1.end(); ++jj, ++kj ) {
+	ih->interaction( *(*ii) , *(*jj) , acc[ki] , acc[kj] );
       }
+    }
+    size_type kk = 0;
+    for ( occupant_iterator ii = v1.begin(); ii!=v1.end(); ++ii, ++kk ) {
+      VIH_::addForce( *(*ii) , acc[kk] );
     }
   }
 
