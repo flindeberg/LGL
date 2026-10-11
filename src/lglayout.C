@@ -277,6 +277,9 @@ try
   threads.defaultThread.scope(PTHREAD_SCOPE_SYSTEM);
   threads.applyAttributes();
   ThreadArgs * threadArgs = new ThreadArgs[threadCount];
+  FixedVec_l * allVoxels = new FixedVec_l[grid.size()];
+  long allVoxelsSize = 0;
+  std::atomic<long> nextVoxel( 0 );
   for( long threadCtr=0; threadCtr<threadCount; ++threadCtr )
     {
       ThreadArgs& current = threadArgs[threadCtr];
@@ -289,6 +292,13 @@ try
       current.voxelList = new FixedVec_l[grid.size()/threadCount+1];
       current.voxelListSize = 
 	schedual.getVoxelList( threadCtr , current.voxelList );
+      // getVoxelList hands out every threadCount-th voxel; put them back
+      // in the scheduler's order in one list shared by all threads
+      for ( long jj=0; jj<current.voxelListSize; ++jj )
+	allVoxels[ threadCtr + jj*threadCount ] = current.voxelList[jj];
+      allVoxelsSize += current.voxelListSize;
+      current.allVoxels = allVoxels;
+      current.nextVoxel = &nextVoxel;
       current.whichThread = threadCtr;
       current.gridIterator = new GridIterator(grid);
       current.gridIterator->id(threadCtr);
@@ -310,6 +320,8 @@ try
       current.levels = &levels;
       current.parents = &parents;
     }
+  for( long threadCtr=0; threadCtr<threadCount; ++threadCtr )
+    threadArgs[threadCtr].allVoxelsSize = allVoxelsSize;
   cout << "Done." << endl;
 
   bool givenCoords = false;

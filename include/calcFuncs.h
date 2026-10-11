@@ -4,6 +4,7 @@
 #ifndef CALCFUNCS_H_
 #define CALCFUNCS_H_
 
+#include <atomic>
 #include "configs.h"
 #include "fixedVecOperations.hpp"
 #include "sphere.hpp"
@@ -34,6 +35,11 @@ struct ThreadArgs
   FixedVec_l * voxelList;
   ParticleStats_t * stats;
   long voxelListSize;
+  // All voxels, shared by the threads, which take chunks of them through
+  // nextVoxel so that the work is balanced dynamically
+  FixedVec_l * allVoxels;
+  long allVoxelsSize;
+  std::atomic<long> * nextVoxel;
   Grid_t * grid;
   prec_t eqDistance;
   EllipseFactors ellipseFactors;

@@ -40,8 +40,13 @@ void * calcInteractions ( void * arg_ )
   args->nodeHandler->springConstant( args->casualSpringConstant );
   //const Graph_t& layout_graph = *(args->layout_graph);
   //layout_graph.print();
-  for ( long ii=0; ii<args->voxelListSize; ++ii ) {
-    grid_i.current( args->voxelList[ii] );
+  // Take chunks of voxels until all are done. Voxels differ a lot in how
+  // many particles they hold, so fixed per-thread lists left threads idle.
+  // Forces are atomic, so any thread can handle any voxel.
+  const long chunk = 256;
+  for ( long start; (start = args->nextVoxel->fetch_add( chunk )) < args->allVoxelsSize; )
+  for ( long ii=start; ii<start+chunk && ii<args->allVoxelsSize; ++ii ) {
+    grid_i.current( args->allVoxels[ii] );
     Voxel_t& vox1 = grid_i.currentVox();
     if ( ! vox1.empty() ) {
       // Iterate through the neighbors of each voxel
@@ -213,6 +218,7 @@ void beginSimulation( ThreadContainer& threads ,
     do { 
 
       // Repulsive terms
+      threadArgs[0].nextVoxel->store( 0 );
       for ( long ii=0; ii<threadCount; ++ii ) {
 	threadArgs[ii].currentLevel = currentLevel;
 	threadArgs[ii].nodeHandler->springConstant( threadArgs[ii].casualSpringConstant );
