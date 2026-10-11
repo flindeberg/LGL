@@ -39,6 +39,9 @@ layout_year(){
     cp tmp/*/0.lgl ${folder}.lgl
     cp tmp/*/0.coords ${folder}.coords
     cp ${folder}_*.png ../september_series/
+    ## drop intermediates that are only copies or inputs of lglbreakup,
+    ## the large years would not fit on a small disk otherwise
+    rm -f tmp/*_vertex_file_match tmp/*_new_lgl.lgl tmp/${folder}.full.lgl tmp/*/0.coords_2400x2400_*.png
     echo "[$(date '+%F %T')] $y: done ($(grep -a 'took' run_${folder}.log))"
 }
 
