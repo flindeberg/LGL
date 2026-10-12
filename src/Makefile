@@ -8,6 +8,11 @@ OBJECTS= lglayout.o calcFuncs.o
 LIBS=-lm -lpthread
 
 INCPATH=-I../include
+# Homebrew's Boost is not on the default include path (macOS)
+BREW_PREFIX := $(shell brew --prefix 2>/dev/null)
+ifneq ($(BREW_PREFIX),)
+INCPATH += -I$(BREW_PREFIX)/include
+endif
 
 all: lglayout lglbreakup lglrebuild lglfileconvert
 
