@@ -54,8 +54,10 @@ per-call setup weighs more with ~12 particles per voxel); on 2025 it gave -32%.
   factor, pointer), one padded block per voxel. The repulsion
   (`calcInteractions`, `src/calcFuncs.C`) then takes work units of at most 256
   particles of one voxel, and for each particle sums the force from the 9 (2D)
-  surrounding blocks with `repulsionFromBlock`: NEON on arm64 for 2D, a scalar
-  loop otherwise. Every pair is seen from both sides, so a particle's force is
+  surrounding blocks with `repulsionFromBlock`: NEON intrinsics on arm64 for
+  2D, the compiler's vector extensions (SSE on x86) elsewhere, a scalar loop
+  for 3D. The vector-extension kernel is ~30% slower than the intrinsics on
+  Apple Silicon (0.55 vs 0.42 ns per pair test), which is why both exist. Every pair is seen from both sides, so a particle's force is
   summed by one thread and stored once (no atomics, no locks). Collisions are
   counted per lane and turned into noise from a per-thread generator
   (`ParticleInteractionHandler::noise`). Hubs with thousands of leaves in one

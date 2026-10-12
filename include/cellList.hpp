@@ -278,17 +278,99 @@ inline unsigned repulsionFromBlockNeon2D( const CellList& cl , unsigned o , unsi
 
 #endif
 
+#ifndef CELLLIST_NEON
+
+// The same kernel with GCC/Clang vector extensions. Comparisons give
+// integer vectors of all ones or zeros, which are used as masks.
+typedef float cl_v4f __attribute__((vector_size(16)));
+typedef int cl_v4i __attribute__((vector_size(16)));
+
+inline cl_v4f cl_load4( const float * p ) { cl_v4f v; __builtin_memcpy( &v , p , 16 ); return v; }
+inline cl_v4f cl_splat( float x ) { cl_v4f v = { x , x , x , x }; return v; }
+inline cl_v4f cl_sqrt4( cl_v4f x ) {
+#if defined(__SSE__)
+  return __builtin_ia32_sqrtps( x );
+#else
+  cl_v4f r = { std::sqrt( x[0] ) , std::sqrt( x[1] ) , std::sqrt( x[2] ) , std::sqrt( x[3] ) };
+  return r;
+#endif
+}
+inline cl_v4f cl_select( cl_v4i mask , cl_v4f a , cl_v4f b ) {
+  return (cl_v4f) ( ( (cl_v4i) a & mask ) | ( (cl_v4i) b & ~mask ) );
+}
+
+// Only valid when DIMENSION == 2 (the other coordinates are ignored)
+template < bool PLAIN >
+inline unsigned repulsionFromBlockVec2D( const CellList& cl , unsigned o , unsigned jstart , unsigned jend , long skip ,
+					 const float xi[DIMENSION] , float ri ,
+					 const PairParams& pp , float f[DIMENSION] )
+{
+  const cl_v4f vxi = cl_splat( xi[0] ), vyi = cl_splat( xi[1] );
+  const cl_v4f vri = cl_splat( ri );
+  const cl_v4f vrr2 = cl_splat( ( ri + ri ) * ( ri + ri ) );
+  const cl_v4f veq2 = cl_splat( pp.eq2 ), veq = cl_splat( pp.eq );
+  const cl_v4f vmk = cl_splat( -pp.k );
+  const cl_v4f vex = cl_splat( pp.ef[0] ), vey = cl_splat( pp.ef[1] );
+  const cl_v4f vzero = cl_splat( 0 );
+  cl_v4i vidx = { (int) jstart , (int) jstart + 1 , (int) jstart + 2 , (int) jstart + 3 };
+  const int skipLane = skip < 0 ? -1 : (int) skip;
+  const cl_v4i vskip = { skipLane , skipLane , skipLane , skipLane };
+  const cl_v4i vfour = { 4 , 4 , 4 , 4 };
+  cl_v4f vfx = vzero , vfy = vzero;
+  cl_v4i vcol = { 0 , 0 , 0 , 0 }; // collisions per lane (a mask lane is -1)
+  const float * xs = cl.x[0].data() + o;
+  const float * ys = cl.x[1].data() + o;
+  const float * rs = cl.r.data() + o;
+  const float * as = cl.af.data() + o;
+  for ( unsigned j=jstart; j<jend; j+=4 ) {
+    const cl_v4f dx = vxi - cl_load4( xs + j );
+    const cl_v4f dy = vyi - cl_load4( ys + j );
+    const cl_v4f d2 = dx * dx + dy * dy;
+    const cl_v4i in = ( d2 < veq2 ) & ( vidx != vskip );
+    cl_v4i col;
+    cl_v4f dsx , dsy;
+    if ( PLAIN ) {
+      col = ( d2 <= vrr2 ) & in;
+      dsx = dx; dsy = dy;
+    } else {
+      const cl_v4f rr = vri + cl_load4( rs + j );
+      col = ( d2 <= rr * rr ) & in;
+      dsx = dx * vex; dsy = dy * vey;
+    }
+    vcol -= col;
+    const cl_v4f m2 = PLAIN ? d2 : dsx * dsx + dsy * dsy;
+    const cl_v4f mag = cl_sqrt4( m2 );
+    cl_v4f sc = ( vmk * ( mag - veq ) ) / mag;
+    if ( ! PLAIN ) { sc = sc * cl_load4( as + j ); }
+    // Lanes out of range, colliding or the particle itself get 0 (a bit
+    // select, so a NaN from 0/0 in those lanes is dropped)
+    sc = cl_select( in & ~col , sc , vzero );
+    vfx += dsx * sc;
+    vfy += dsy * sc;
+    vidx += vfour;
+  }
+  f[0] += vfx[0] + vfx[1] + vfx[2] + vfx[3];
+  f[1] += vfy[0] + vfy[1] + vfy[2] + vfy[3];
+  return (unsigned) ( vcol[0] + vcol[1] + vcol[2] + vcol[3] );
+}
+
+#endif
+
 inline unsigned repulsionFromBlock( const CellList& cl , unsigned o , unsigned jstart , unsigned jend , long skip ,
 				    const float xi[DIMENSION] , float ri ,
 				    const PairParams& pp , bool plainBlock , float f[DIMENSION] )
 {
-#ifdef CELLLIST_NEON
   if ( DIMENSION == 2 ) {
+#ifdef CELLLIST_NEON
     return plainBlock
       ? repulsionFromBlockNeon2D< true >( cl , o , jstart , jend , skip , xi , ri , pp , f )
       : repulsionFromBlockNeon2D< false >( cl , o , jstart , jend , skip , xi , ri , pp , f );
-  }
+#else
+    return plainBlock
+      ? repulsionFromBlockVec2D< true >( cl , o , jstart , jend , skip , xi , ri , pp , f )
+      : repulsionFromBlockVec2D< false >( cl , o , jstart , jend , skip , xi , ri , pp , f );
 #endif
+  }
   return repulsionFromBlockScalar( cl , o , jstart , jend , skip , xi , ri , pp , f );
 }
 
